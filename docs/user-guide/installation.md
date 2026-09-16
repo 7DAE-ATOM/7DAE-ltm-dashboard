@@ -13,7 +13,7 @@ npm install
 ```bash
 npm run dev
 ```
-This starts `next dev -p 3001` — a full Next.js dev server (hot reload, no static export) on **http://localhost:3001**.
+This starts `next dev -p 3002` — a full Next.js dev server (hot reload, no static export) on **http://localhost:3002**.
 
 By default the app expects the backend at `http://localhost:8080/atom-synchronizer-dev`. To point at a different backend, set `NEXT_PUBLIC_ATOM_API_BASE_URL` before starting the dev server — see [Configuration](configuration.md) for the full list of variables.
 
@@ -27,7 +27,7 @@ When `NODE_ENV=production`, `next.config.mjs` switches `output` to `"export"`: t
 ```bash
 npm start
 ```
-Serves the static `out/` directory (via `serve`) on port 3001, so you can sanity-check the exported build before shipping it.
+Serves the static `out/` directory (via `serve`) on port 3002, so you can sanity-check the exported build before shipping it.
 
 ## Lint
 ```bash

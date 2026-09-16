@@ -4,9 +4,11 @@ import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import FilterBar, { type FilterValue } from "@/components/FilterBar";
 import FilterSheet from "@/components/FilterSheet";
+import ExportPdfButton from "@/components/ExportPdfButton";
 import { filterLabTestMeans } from "@/lib/labtestmeans";
 import { expandSelection } from "@/lib/aircraftStructure";
 import { useLabTestMeans } from "@/lib/useLabTestMeans";
+import { useExportPdf } from "@/lib/useExportPdf";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
 
@@ -98,6 +100,13 @@ function MapLoaded({
     });
   }, [labTestMeans, tree, filters]);
 
+  const { isExporting, handleExportPdf } = useExportPdf({
+    visible,
+    totalCount: labTestMeans.length,
+    filters,
+    tree,
+  });
+
   return (
     <div className="relative h-[calc(100vh-57px)]">
       <div className="absolute inset-0">
@@ -111,10 +120,9 @@ function MapLoaded({
         </div>
       )}
       <div className="absolute top-4 left-4 w-[340px] max-h-[calc(100vh-100px)] glass-panel p-5 overflow-y-auto z-10 hidden lg:block">
-        <h2 className="text-lg font-bold mb-1">Lab test means by location</h2>
-        <p className="text-xs text-muted mb-4">
-          {visible.length} of {labTestMeans.length} shown on map
-        </p>
+        <div className="mb-3 text-xs text-muted font-mono">
+          {visible.length} / {labTestMeans.length} lab test means
+        </div>
         <FilterBar
           types={types}
           statuses={statuses}
@@ -126,6 +134,12 @@ function MapLoaded({
           portfolios={portfolios}
           value={filters}
           onChange={setFilters}
+        />
+        <ExportPdfButton
+          count={visible.length}
+          disabled={visible.length === 0 || isExporting}
+          isExporting={isExporting}
+          onClick={handleExportPdf}
         />
       </div>
       <FilterSheet
@@ -140,6 +154,14 @@ function MapLoaded({
         value={filters}
         onChange={setFilters}
         count={visible.length}
+        extraContent={
+          <ExportPdfButton
+            count={visible.length}
+            disabled={visible.length === 0 || isExporting}
+            isExporting={isExporting}
+            onClick={handleExportPdf}
+          />
+        }
       />
     </div>
   );

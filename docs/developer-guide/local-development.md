@@ -2,7 +2,7 @@
 
 ## Day-to-day workflow
 ```bash
-npm run dev     # dev server on http://localhost:3001
+npm run dev     # dev server on http://localhost:3002
 npm run lint     # eslint .
 ```
 There is no dedicated test script in this project.
@@ -23,7 +23,7 @@ rm -rf .next
 npm run build
 npm start
 ```
-`npm start` serves the static `out/` directory via `serve` on port 3001 — the closest local approximation of what the deployed nginx image serves.
+`npm start` serves the static `out/` directory via `serve` on port 3002 — the closest local approximation of what the deployed nginx image serves.
 
 ## Backend dependency
 The app has no mock data layer: everything renders from a live `atom-synchronizer-dev` instance. Point `NEXT_PUBLIC_ATOM_API_BASE_URL` at a reachable backend before expecting real content — see [Configuration](../user-guide/configuration.md) and [API](api.md).

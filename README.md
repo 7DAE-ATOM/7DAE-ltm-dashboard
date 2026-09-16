@@ -12,7 +12,7 @@ A Next.js 16 / React 19 dashboard visualizing Airbus **Lab Test Means** (LTM) â€
 ## Quick start
 ```bash
 npm install
-npm run dev   # http://localhost:3001
+npm run dev   # http://localhost:3002
 ```
 See [docs/user-guide/installation.md](docs/user-guide/installation.md) for prerequisites and production build steps.
 

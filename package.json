@@ -3,9 +3,9 @@
   "version": "1.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3001",
+    "dev": "next dev -p 3002",
     "build": "next build",
-    "start": "npx --yes serve out -l 3001",
+    "start": "npx --yes serve out -l 3002",
     "lint": "eslint .",
     "sonar": "bash sonar.sh",
     "test:e2e": "playwright test",

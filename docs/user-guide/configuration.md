@@ -20,5 +20,5 @@ Build-only variables (read by `next.config.mjs`, not exposed to the client beyon
 The header includes a light/dark toggle. The choice is persisted in `localStorage` and applied before first paint (an inline anti-FOUC script in `app/layout.tsx`) to avoid a flash of the wrong theme; absent a stored preference, it falls back to the OS `prefers-color-scheme`.
 
 ## Ports
-- **3001** — dev server (`npm run dev`) and local static preview (`npm start`).
+- **3002** — dev server (`npm run dev`) and local static preview (`npm start`).
 - **8080** — the container port exposed by the production nginx image (see [Deployment](../operations/deployment.md)).
