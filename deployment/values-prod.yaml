@@ -4,7 +4,7 @@ app:
 
   image:
     name: "r-2k77-devops-docker-releases-local.artifactory.fr.eu.airbus.corp/transversal/ltm-dashboard"
-    tag: "0.1.0"
+    tag: "1.0-SNAPSHOT"
     pullPolicy: Always
     pullSecret:
       enabled: false
