@@ -19,11 +19,13 @@ import {
   Position,
   MarkerType,
   applyNodeChanges,
+  useReactFlow,
   type Node,
   type Edge,
   type EdgeProps,
   type NodeChange,
 } from "@xyflow/react";
+import Link from "next/link";
 import "@xyflow/react/dist/style.css";
 import type { ElkNode } from "elkjs/lib/elk.bundled.js";
 import type {
@@ -37,7 +39,18 @@ import InteractionEmptyState from "./InteractionEmptyState";
 import BenchPreviewModal, { type PreviewTarget } from "./BenchPreviewModal";
 import NodeContextMenu, { type NodeContextMenuTarget } from "./NodeContextMenu";
 import { useElkLayout, type ElkPositions } from "./useElkLayout";
-import { useInteractionDisplaySettings } from "@/lib/interactionDisplaySettings";
+import {
+  useInteractionDisplaySettings,
+  EDGE_CURVATURE_NEUTRAL,
+} from "@/lib/interactionDisplaySettings";
+import {
+  useEdgeCurvature,
+  setEdgeCurvature,
+  getAllEdgeCurvatures,
+  setEdgeCurvatures,
+  pruneEdgeCurvature,
+  subscribeEdgeCurvatureChange,
+} from "@/lib/interactionEdgeCurvature";
 import {
   KickoffIcon,
   InServiceIcon,
@@ -58,10 +71,19 @@ type Props = {
   onDirty: () => void;
   pendingLoad: InteractionSave | null;
   onPendingLoadConsumed: () => void;
+  /** Hiding a selected bench has to drop it from the selection too, or its
+   * chip would still claim it is on the diagram. The parent owns the URL that
+   * holds the selection, hence the callback. Deliberately NOT the parent's
+   * `removeBench` path: that one cascades, and hiding must not. */
+  onRootHidden: (externalId: string) => void;
 };
 
 export type DependencyGraphHandle = {
-  getSnapshot: () => { nodes: InteractionSaveNode[]; edges: InteractionSaveEdge[] } | null;
+  getSnapshot: () => {
+    nodes: InteractionSaveNode[];
+    edges: InteractionSaveEdge[];
+    curvature: Record<string, number>;
+  } | null;
   addBench: (bench: LabTestMean) => void;
   removeBench: (externalId: string) => void;
 };
@@ -236,7 +258,31 @@ function NodeCard({ data }: Readonly<{ data: NodeData }>) {
         // frame is meant to carry the type color, per spec.
         style={{ color: data.isRoot ? colorVar : undefined }}
       >
-        {truncateLabel(data.label)}
+        {data.resolved ? (
+          <Link
+            href={`/labtestmean?id=${encodeURIComponent(data.resolved.externalId)}`}
+            // Same static shell as every other detail link — see
+            // LabTestMeanCard for why prefetching them all is wasteful.
+            prefetch={false}
+            // New tab: navigating away would throw out the diagram the user
+            // has been arranging. Same rule as BenchPreviewModal's link.
+            target="_blank"
+            rel="noopener noreferrer"
+            // React Flow's own opt-out. Without it a pointerdown on the title
+            // starts a node drag, and the click that follows is ambiguous;
+            // with it the title is a link and the rest of the card still
+            // drags, so no distance heuristic is needed.
+            className="nodrag hover:underline"
+            // The card's double-click opens the preview modal — a double-click
+            // that starts on the title shouldn't do both.
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            {truncateLabel(data.label)}
+          </Link>
+        ) : (
+          // Nothing to link to: this id isn't in the catalogue.
+          truncateLabel(data.label)
+        )}
       </div>
       {data.resolved ? (
         (() => {
@@ -267,8 +313,26 @@ function NodeCard({ data }: Readonly<{ data: NodeData }>) {
 
 const nodeTypes = { card: NodeCard };
 
-function RadialEdge({ data, markerEnd, style }: EdgeProps) {
+/** Ratio of the chord's length used as the default control-point offset, and
+ * the ceiling that keeps a very long edge from ballooning. */
+const BASE_RATIO = 0.16;
+const MAX_CURVE = 60;
+/** Invisible stroke that makes a 2px line easy to hover. */
+const HOVER_WIDTH = 20;
+/** Grace period so the pointer can travel from the thin line to the handle
+ * without the handle vanishing underneath it. */
+const HIDE_DELAY_MS = 250;
+
+function RadialEdge({ id, data, markerEnd, style }: EdgeProps) {
   const d = data as unknown as EdgeData;
+  const { edgeCurvature } = useInteractionDisplaySettings();
+  const override = useEdgeCurvature(id);
+  const { screenToFlowPosition, getZoom } = useReactFlow();
+  const [hovered, setHovered] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragStartValue = useRef<number | null>(null);
+
   const mx = (d.sx + d.tx) / 2;
   const my = (d.sy + d.ty) / 2;
   const dx = d.tx - d.sx;
@@ -276,37 +340,150 @@ function RadialEdge({ data, markerEnd, style }: EdgeProps) {
   const len = Math.hypot(dx, dy) || 1;
   const nx = -dy / len;
   const ny = dx / len;
-  const offset = len * 0.16 * d.bend;
+
+  // A hand-set bow wins outright; otherwise the alternating ±1 `bend` the
+  // graph assigned, scaled by the global setting.
+  const offset =
+    override ??
+    Math.min(len * BASE_RATIO, MAX_CURVE) *
+      (edgeCurvature / EDGE_CURVATURE_NEUTRAL) *
+      d.bend;
+
   const cx = mx + nx * offset;
   const cy = my + ny * offset;
   const path = `M ${d.sx} ${d.sy} Q ${cx} ${cy} ${d.tx} ${d.ty}`;
-  return <BaseEdge path={path} markerEnd={markerEnd} style={style} />;
+
+  // The handle rides the curve, not the chord: B(0.5) = (P0 + 2C + P2) / 4,
+  // which sits half the control offset away from the chord.
+  const handleX = mx + nx * (offset / 2);
+  const handleY = my + ny * (offset / 2);
+
+  const show = () => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    setHovered(true);
+  };
+  const scheduleHide = () => {
+    if (dragging) return;
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => setHovered(false), HIDE_DELAY_MS);
+  };
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setEdgeCurvature(id, dragStartValue.current);
+      setDragging(false);
+    };
+    globalThis.addEventListener("keydown", onKeyDown);
+    return () => globalThis.removeEventListener("keydown", onKeyDown);
+  }, [dragging, id]);
+
+  useEffect(
+    () => () => {
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    },
+    [],
+  );
+
+  function onPointerDown(e: React.PointerEvent<SVGCircleElement>) {
+    // Without both of these the canvas pans under the gesture.
+    e.stopPropagation();
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartValue.current = override;
+    setDragging(true);
+  }
+
+  function onPointerMove(e: React.PointerEvent<SVGCircleElement>) {
+    if (!dragging) return;
+    e.stopPropagation();
+    const p = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    // ×2 mirrors the ½ above: the handle rides the curve, the value drives
+    // the control point.
+    setEdgeCurvature(id, 2 * ((p.x - mx) * nx + (p.y - my) * ny));
+  }
+
+  function endDrag(e: React.PointerEvent<SVGCircleElement>) {
+    if (!dragging) return;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    setDragging(false);
+    scheduleHide();
+  }
+
+  // The handle is a control, not part of the diagram: dividing by the zoom
+  // keeps it the same size on screen however far the canvas is scaled.
+  const zoom = getZoom() || 1;
+
+  return (
+    <>
+      <BaseEdge path={path} markerEnd={markerEnd} style={style} />
+      {/* Wide, invisible twin of the path: what the pointer actually hits. */}
+      <path
+        d={path}
+        fill="none"
+        stroke="transparent"
+        strokeWidth={HOVER_WIDTH}
+        pointerEvents="stroke"
+        onPointerEnter={show}
+        onPointerLeave={scheduleHide}
+      />
+      {/* Last sibling on purpose, so it wins hit-testing against the hover
+          path drawn above it. */}
+      {(hovered || dragging) && (
+        <circle
+          cx={handleX}
+          cy={handleY}
+          r={6 / zoom}
+          className="nodrag nopan"
+          fill="var(--color-bg)"
+          stroke="var(--color-accent)"
+          strokeWidth={2 / zoom}
+          style={{ cursor: "grab" }}
+          pointerEvents="all"
+          onPointerEnter={show}
+          onPointerLeave={scheduleHide}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+          // Back to the global setting.
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            setEdgeCurvature(id, null);
+          }}
+        />
+      )}
+    </>
+  );
 }
 
 const edgeTypes = { radial: RadialEdge };
 
 /** Structure only (ids + sizes + edges) — no positions. ELK computes those.
- * Only used for the INITIAL graph (every selected root + each one's direct
- * relations); nodes added later via the context menu, or a whole new root
- * added via search, are placed locally (see `placeNewNode`) rather than
- * re-running ELK, so neither ever disturbs existing positions.
+ * Only used for the INITIAL graph, which holds **the selected roots and
+ * nothing else**: selecting a bench no longer pulls in its neighbors. Nodes
+ * added later via the context menu, or a whole new root added via search,
+ * are placed locally (see `placeNewNode`) rather than re-running ELK, so
+ * neither ever disturbs existing positions.
  *
- * With multiple roots, all of them are seeded as children FIRST so a node
- * that's simultaneously a root AND another root's direct relation is never
- * overwritten by the second pass below. */
-function addElkChildAndEdge(
+ * Edges between two selected roots ARE still fed to ELK. Without them
+ * `useElkLayout` would see two single-node components, place each at its own
+ * origin and tile them apart — drawing their relation as a line across the
+ * whole packed grid. With the edge, radial sits them next to each other. */
+function addElkEdgeBetweenRoots(
   rootId: string,
   kind: DependencyRelationKind,
   rel: DependencyRelation,
   childrenById: Map<string, ElkNode>,
   edges: NonNullable<ElkNode["edges"]>,
   seenPairs: Set<string>,
-  nodeWidth: number,
 ): void {
   if (rel.externalId === rootId) return; // self-reference
-  if (!childrenById.has(rel.externalId)) {
-    childrenById.set(rel.externalId, { id: rel.externalId, width: nodeWidth, height: CARD_H });
-  }
+  // Every root was seeded before this runs, so "already a child" is exactly
+  // "is itself a selected root". A relation to anything else contributes no
+  // node and no edge.
+  if (!childrenById.has(rel.externalId)) return;
   const pairKey = `${canonicalKind(kind)}|${[rootId, rel.externalId].sort((a, b) => a.localeCompare(b)).join("|")}`;
   if (seenPairs.has(pairKey)) return;
   seenPairs.add(pairKey);
@@ -340,13 +517,17 @@ function toElkGraph(
   // benches — `buildGraphStructure` (rendering) doesn't need this since its
   // edge-id computation already uses the real direction and is naturally
   // consistent from both ends.
+  //
+  // This dedup carries MORE weight than it used to: root-to-root is now the
+  // only kind of edge that survives the guard in `addElkEdgeBetweenRoots`,
+  // i.e. precisely the mirrored case it exists for.
   const seenPairs = new Set<string>();
 
   rootIds.forEach((rootId) => {
     const groups = groupsByRoot.get(rootId) ?? [];
     groups.forEach(({ kind, list }) => {
       list.forEach((rel) =>
-        addElkChildAndEdge(rootId, kind, rel, childrenById, edges, seenPairs, nodeWidth),
+        addElkEdgeBetweenRoots(rootId, kind, rel, childrenById, edges, seenPairs),
       );
     });
   });
@@ -370,11 +551,55 @@ type EdgeMeta = {
   dependencyType?: "mandatory" | "optional";
 };
 
+/**
+ * Single source of truth for an edge's identity, direction and style.
+ *
+ * Every site that builds an edge goes through here. That matters more than
+ * the usual "don't repeat yourself": the id scheme has to be byte-identical
+ * everywhere or two paths that mean the same relation produce two different
+ * ids — a duplicate edge that no dedup would catch, since each dedups on the
+ * id it just computed.
+ *
+ * Direction is the relation's REAL one: `supports` points from the neighbor
+ * to the spawner, the other two kinds from the spawner out. `bend` alternates
+ * by the caller's loop index; it is purely cosmetic.
+ */
+/** The id the same relation would carry if it had been discovered from the
+ * other end. `depends-on`/`supports` are mirrored by the backend and both
+ * ends already compute the identical id, so this only ever bites for
+ * `shared-resource` — where a bench lists the resource but the resource does
+ * not list the bench, and a second path (an expansion, or "Usable by") can
+ * reach the same fact from the opposite side. Checking it keeps one relation
+ * from being drawn as two parallel lines. */
+function reverseEdgeId(edge: EdgeMeta): string {
+  return `${edge.kind}:${edge.target}->${edge.source}`;
+}
 
+function makeEdgeMeta(
+  kind: DependencyRelationKind,
+  spawnerId: string,
+  rel: Pick<DependencyRelation, "externalId" | "dependencyType">,
+  index: number,
+): EdgeMeta | null {
+  if (rel.externalId === spawnerId) return null; // self-reference
+  const [source, target] =
+    kind === "supports" ? [rel.externalId, spawnerId] : [spawnerId, rel.externalId];
+  return {
+    id: `${canonicalKind(kind)}:${source}->${target}`,
+    source,
+    target,
+    kind: canonicalKind(kind),
+    bend: index % 2 === 0 ? 1 : -1,
+    dependencyType: rel.dependencyType,
+  };
+}
+
+/** The initial diagram: one card per selected bench, and the edges that join
+ * two of them. Neighbors are never materialised here — they only ever arrive
+ * through the node context menu. */
 function buildGraphStructure(
   roots: LabTestMean[],
   groupsByRoot: Map<string, RelationGroup[]>,
-  resolve: (id: string) => LabTestMean | null,
   positions: ElkPositions,
 ): { nodes: Node[]; edgeMeta: EdgeMeta[] } {
   const nodesById = new Map<string, Node>();
@@ -396,39 +621,23 @@ function buildGraphStructure(
     groups.forEach(({ kind, list }) => {
       list.forEach((rel, i) => {
         if (rel.externalId === rootId) return; // self-reference
-        if (!nodesById.has(rel.externalId)) {
-          nodesById.set(rel.externalId, {
-            id: rel.externalId,
-            type: "card",
-            position: positions.get(rel.externalId) ?? { x: 0, y: 0 },
-            data: {
-              label: rel.name,
-              isRoot: false,
-              resolved: resolve(rel.externalId),
-            } satisfies NodeData,
-            selectable: false,
-          });
+        // Every root is in `nodesById` before this loop, and nothing else
+        // ever will be, so this is exactly "the other end is itself a
+        // selected bench". A relation to anything else draws nothing —
+        // upholding the rule that an edge never exists without both of its
+        // endpoints on screen.
+        if (!nodesById.has(rel.externalId)) return;
+
+        // The rendered arrow follows the relation's real direction (see
+        // `makeEdgeMeta`) — already consistent from both ends of a mirrored
+        // relation between two roots, so no undirected dedup is needed here
+        // (cf. `toElkGraph`, which needs it because it always normalizes to
+        // root->neighbor).
+        const edge = makeEdgeMeta(kind, rootId, rel, i);
+        if (!edge || edgeMetaById.has(edge.id) || edgeMetaById.has(reverseEdgeId(edge))) {
+          return;
         }
-
-        // "depends-on"/"shared-resource": the spawning bench needs this
-        // neighbor. "supports": the neighbor depends on the spawning bench.
-        // The rendered arrow always follows this real direction — already
-        // consistent from both ends of a mirrored relation between two
-        // roots, so no undirected dedup is needed here (cf. `toElkGraph`,
-        // which needs it because it always normalizes to root->neighbor).
-        const [source, target] =
-          kind === "supports" ? [rel.externalId, rootId] : [rootId, rel.externalId];
-        const edgeId = `${canonicalKind(kind)}:${source}->${target}`;
-        if (edgeMetaById.has(edgeId)) return;
-
-        edgeMetaById.set(edgeId, {
-          id: edgeId,
-          source,
-          target,
-          kind: canonicalKind(kind),
-          bend: i % 2 === 0 ? 1 : -1,
-          dependencyType: rel.dependencyType,
-        });
+        edgeMetaById.set(edge.id, edge);
       });
     });
   });
@@ -561,85 +770,38 @@ function placeNewNode(
   return { x, y };
 }
 
-/** Builds the neighbor cards for a newly-added root bench (`addBench`),
- * covering all three relation kinds. Kept as a standalone function (not a
- * closure inside the component) to keep nesting shallow — see `collectNewEdgesForBench`
- * for the matching edge builder. */
-function collectNewNodesForBench(
+/** Every edge the bench has to a node that is ALREADY on the canvas.
+ *
+ * This is where the diagram's central rule lives: adding a bench never
+ * creates a neighbor card, only the lines joining it to what the user has
+ * already chosen to display. `displayedIds` must therefore include the
+ * bench's own node — see the ref dance in `addBench`.
+ *
+ * Deduped against `existingIds` (mutated in place), which also collapses a
+ * mirrored depends-on/supports pair into the single edge it really is. */
+function collectEdgesToDisplayedNodes(
   bench: LabTestMean,
-  current: Node[],
-  rootPos: { x: number; y: number },
-  rootNode: Node,
-  nodeWidth: number,
-  resolveBench: (id: string) => LabTestMean | null,
-): Node[] {
-  const additions: Node[] = [];
-  const currentIds = new Set(current.map((n) => n.id));
-  const additionIds = new Set<string>();
-  relationGroups(bench).forEach(({ kind, list }) => {
-    const relevant = list.filter(
-      (rel) =>
-        rel.externalId !== bench.externalId &&
-        !currentIds.has(rel.externalId) &&
-        !additionIds.has(rel.externalId),
-    );
-    relevant.forEach((rel, i) => {
-      additionIds.add(rel.externalId);
-      additions.push({
-        id: rel.externalId,
-        type: "card",
-        position: placeNewNode(
-          rootPos,
-          i,
-          relevant.length,
-          kind,
-          [...current, rootNode, ...additions],
-          nodeWidth,
-        ),
-        data: {
-          label: rel.name,
-          isRoot: false,
-          resolved: resolveBench(rel.externalId),
-        } satisfies NodeData,
-        selectable: false,
-        style: { cursor: "pointer" },
-      });
-    });
-  });
-  return additions;
-}
-
-/** Matching edge builder for `collectNewNodesForBench` — same relation-kind
- * traversal, deduped against `existingIds` (mutated in place). */
-function collectNewEdgesForBench(
-  bench: LabTestMean,
-  newRootId: string,
+  spawnerId: string,
+  displayedIds: ReadonlySet<string>,
   existingIds: Set<string>,
 ): EdgeMeta[] {
   const additions: EdgeMeta[] = [];
   relationGroups(bench).forEach(({ kind, list }) => {
     list.forEach((rel, i) => {
-      if (rel.externalId === newRootId) return;
-      const [source, target] =
-        kind === "supports" ? [rel.externalId, newRootId] : [newRootId, rel.externalId];
-      const edgeId = `${canonicalKind(kind)}:${source}->${target}`;
-      if (existingIds.has(edgeId)) return;
-      existingIds.add(edgeId);
-      additions.push({
-        id: edgeId,
-        source,
-        target,
-        kind: canonicalKind(kind),
-        bend: i % 2 === 0 ? 1 : -1,
-        dependencyType: rel.dependencyType,
-      });
+      if (!displayedIds.has(rel.externalId)) return;
+      const edge = makeEdgeMeta(kind, spawnerId, rel, i);
+      if (!edge || existingIds.has(edge.id) || existingIds.has(reverseEdgeId(edge))) {
+        return;
+      }
+      existingIds.add(edge.id);
+      additions.push(edge);
     });
   });
   return additions;
 }
 
 const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function DependencyGraph(
-  { benches, allBenches, onDirty, pendingLoad, onPendingLoadConsumed },
+  { benches, allBenches, onDirty, pendingLoad, onPendingLoadConsumed, onRootHidden },
   ref,
 ) {
   const [hidden, setHidden] = useState<Record<EdgeColorKind, boolean>>({
@@ -674,6 +836,9 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
     [benches],
   );
 
+  // The initial graph holds the selected roots only — no neighbors — plus
+  // whatever edges join two of those roots.
+  //
   // The ELK graph/layout is deliberately NOT derived reactively from
   // `benches` — computed once, from whichever selection existed at mount,
   // via this lazy initializer, and never again. Adding/removing a bench must
@@ -691,8 +856,8 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
     if (layout.status !== "ok") {
       return { nodes: [] as Node[], edgeMeta: [] as EdgeMeta[] };
     }
-    return buildGraphStructure(benches, groupsByRoot, resolveBench, layout.positions);
-  }, [benches, groupsByRoot, resolveBench, layout]);
+    return buildGraphStructure(benches, groupsByRoot, layout.positions);
+  }, [benches, groupsByRoot, layout]);
 
   // `nodes`/`edgeMeta` are real state (not derived), so the context-menu
   // expansion/hide actions can mutate them directly, and dragging can patch
@@ -717,6 +882,11 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
     (save: InteractionSave) => {
       const saveRootIds = new Set(save.rootExternalIds);
       isBaselineUpdateRef.current = true;
+      // Before the nodes and edges, so an edge whose component mounts on this
+      // very render already reads its bow through `getSnapshot`. Absent on a
+      // save made before the field existed — `{}` puts every edge back on
+      // the global setting, which is the right fallback.
+      setEdgeCurvatures(save.curvature ?? {});
       setNodes(
         save.nodes.map((n) => {
           const resolved = byExternalId.get(n.id) ?? null;
@@ -819,6 +989,25 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
     onDirty();
   }, [nodes, edgeMeta, onDirty]);
 
+  /* A curvature drag goes through neither `nodes` nor `edgeMeta`, so the
+   * effect above cannot see it. Same baseline guard: restoring the bows of a
+   * freshly loaded diagram must not immediately mark it dirty. */
+  useEffect(
+    () =>
+      subscribeEdgeCurvatureChange(() => {
+        if (isBaselineUpdateRef.current) return;
+        onDirty();
+      }),
+    [onDirty],
+  );
+
+  /* Bows belong to edges that are still on the canvas. Without this, hiding a
+   * node and bringing it back would resurrect a bend the user can no longer
+   * see or reach. */
+  useEffect(() => {
+    pruneEdgeCurvature(new Set(edgeMeta.map((e) => e.id)));
+  }, [edgeMeta]);
+
   const onNodesChange = useCallback((changes: NodeChange[]) => {
     setNodes((current) => applyNodeChanges(changes, current));
   }, []);
@@ -834,6 +1023,11 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
       const relevant = list.filter((rel) => rel.externalId !== nodeId);
       if (relevant.length === 0) return;
 
+      // Same ordering contract as `addBench`: the node updater runs first and
+      // publishes what is on screen afterwards, so the edge updater can wire
+      // the arrivals to everything already displayed.
+      const displayedIdsRef = { current: new Set<string>() };
+      const addedRef = { current: [] as LabTestMean[] };
       setNodes((current) => {
         const existingIds = new Set(current.map((n) => n.id));
         const spawnerNode = current.find((n) => n.id === nodeId);
@@ -858,25 +1052,40 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
           selectable: false,
           style: { cursor: "pointer" },
         }));
+        displayedIdsRef.current = new Set([
+          ...existingIds,
+          ...additions.map((n) => n.id),
+        ]);
+        // Only the arrivals that resolve in the catalogue carry relation
+        // lists of their own; one that doesn't gets just its spawner edge.
+        addedRef.current = additions
+          .map((n) => resolveBench(n.id))
+          .filter((b): b is LabTestMean => b !== null);
         return additions.length > 0 ? [...current, ...additions] : current;
       });
 
       setEdgeMeta((current) => {
         const existingIds = new Set(current.map((e) => e.id));
         const additions: EdgeMeta[] = [];
+        // The expansion's own edges: spawner -> each relation of this kind,
+        // including relations whose node was already on screen.
         relevant.forEach((rel, i) => {
-          const [source, target] =
-            kind === "supports" ? [rel.externalId, nodeId] : [nodeId, rel.externalId];
-          const edgeId = `${canonicalKind(kind)}:${source}->${target}`;
-          if (existingIds.has(edgeId)) return;
-          additions.push({
-            id: edgeId,
-            source,
-            target,
-            kind: canonicalKind(kind),
-            bend: i % 2 === 0 ? 1 : -1,
-            dependencyType: rel.dependencyType,
-          });
+          const edge = makeEdgeMeta(kind, nodeId, rel, i);
+          if (!edge || existingIds.has(edge.id)) return;
+          existingIds.add(edge.id);
+          additions.push(edge);
+        });
+        // Then the same rule selection obeys: a node that arrives is joined
+        // to every displayed node it relates to, not only to its spawner.
+        addedRef.current.forEach((added) => {
+          additions.push(
+            ...collectEdgesToDisplayedNodes(
+              added,
+              added.externalId,
+              displayedIdsRef.current,
+              existingIds,
+            ),
+          );
         });
         return additions.length > 0 ? [...current, ...additions] : current;
       });
@@ -884,15 +1093,28 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
     [resolveBench, displaySettings.nodeWidth],
   );
 
+  /**
+   * Takes one node off the canvas, with its edges, and nothing else.
+   *
+   * No cascade — deliberately, and this is what sets it apart from
+   * `removeBench`: a neighbour that was only reachable through this node stays
+   * where it is. Hiding says "I don't want to look at this card", not "undo
+   * everything it brought".
+   *
+   * A selected bench can be hidden too. It then also leaves the selection, via
+   * `onRootHidden`, because a chip for a card that is no longer on the diagram
+   * would be a lie. Its neighbours still stay. The one exception is the last
+   * remaining selection — see `canHide` where the menu item is built.
+   */
   const handleHide = useCallback(
     (nodeId: string) => {
-      if (rootIds.has(nodeId)) return; // a selected root only leaves via its chip's "×"
       setNodes((current) => current.filter((n) => n.id !== nodeId));
       setEdgeMeta((current) =>
         current.filter((e) => e.source !== nodeId && e.target !== nodeId),
       );
+      if (rootIds.has(nodeId)) onRootHidden(nodeId);
     },
-    [rootIds],
+    [rootIds, onRootHidden],
   );
 
   // The reverse of `sharedResources`: which OTHER benches in the whole
@@ -924,6 +1146,9 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
       const users = usersOf(nodeId);
       if (users.length === 0) return;
 
+      // Same ordering contract as `addBench` / `handleExpand`.
+      const displayedIdsRef = { current: new Set<string>() };
+      const addedRef = { current: [] as LabTestMean[] };
       setNodes((current) => {
         const existingIds = new Set(current.map((n) => n.id));
         const spawnerNode = current.find((n) => n.id === nodeId);
@@ -948,6 +1173,13 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
           selectable: false,
           style: { cursor: "pointer" },
         }));
+        displayedIdsRef.current = new Set([
+          ...existingIds,
+          ...additions.map((n) => n.id),
+        ]);
+        // `usersOf` already hands back the full bench for each user, so no
+        // re-resolution is needed here.
+        addedRef.current = toAdd.map(({ bench: u }) => u);
         return additions.length > 0 ? [...current, ...additions] : current;
       });
 
@@ -956,19 +1188,26 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
         const additions: EdgeMeta[] = [];
         users.forEach(({ bench: u, relation }, i) => {
           // The user bench needs the resource — same direction convention as
-          // a normal "shared-resource" expansion (spawner -> neighbor).
-          const source = u.externalId;
-          const target = nodeId;
-          const edgeId = `shared-resource:${source}->${target}`;
-          if (existingIds.has(edgeId)) return;
-          additions.push({
-            id: edgeId,
-            source,
-            target,
-            kind: "shared-resource",
-            bend: i % 2 === 0 ? 1 : -1,
-            dependencyType: relation.dependencyType,
-          });
+          // a normal "shared-resource" expansion (spawner -> neighbor). The
+          // spawner here is the USER bench, and `relation` is its own entry
+          // pointing back at this resource, so `makeEdgeMeta` yields exactly
+          // `shared-resource:<user>-><resource>`.
+          const edge = makeEdgeMeta("shared-resource", u.externalId, relation, i);
+          if (!edge || existingIds.has(edge.id)) return;
+          existingIds.add(edge.id);
+          additions.push(edge);
+        });
+        // Then the same rule selection obeys: a node that arrives is joined
+        // to every displayed node it relates to, not only to its spawner.
+        addedRef.current.forEach((added) => {
+          additions.push(
+            ...collectEdgesToDisplayedNodes(
+              added,
+              added.externalId,
+              displayedIdsRef.current,
+              existingIds,
+            ),
+          );
         });
         return additions.length > 0 ? [...current, ...additions] : current;
       });
@@ -976,20 +1215,27 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
     [usersOf, resolveBench, displaySettings.nodeWidth],
   );
 
-  // Adds a brand-new selected bench without touching anything already on
-  // screen: if it was already present as a plain neighbor of another root
-  // (via expansion), promote it in place (same position, restyled to a
-  // root); otherwise place its own node under the current bounding box and
-  // expand its direct relations locally — same non-ELK placement as
-  // `handleExpand`, but covering all three relation kinds (depends-on,
-  // supports, AND shared-resource) since this mirrors the INITIAL per-bench
-  // graph, not a context-menu expansion (which only ever exposes the first
-  // two). Marks the diagram dirty like any other content change — this is
-  // NOT a baseline reset.
+  // Adds a newly selected bench WITHOUT expanding anything: exactly one card
+  // appears (or, if the bench was already on screen as a plain neighbor of
+  // another root, it is promoted in place — same position, restyled to a
+  // root). The only lines drawn are those joining it to nodes the user has
+  // already put on the canvas; its other relations wait for a context-menu
+  // expansion. Marks the diagram dirty like any other content change — this
+  // is NOT a baseline reset.
   const addBench = useCallback(
     (bench: LabTestMean) => {
       const newRootId = bench.externalId;
+      // The edge updater needs the node ids INCLUDING the one the node
+      // updater is producing, and the two updaters cannot see each other.
+      // React drains the `useState` queues in hook-declaration order and
+      // `nodes` is declared before `edgeMeta`, so the node updater always
+      // runs first — the same property `removeBench` already relies on with
+      // `reachableRef`. Assigned at the top of the updater so BOTH branches
+      // set it: miss the promote branch and the edge updater would silently
+      // add nothing.
+      const displayedIdsRef = { current: new Set<string>() };
       setNodes((current) => {
+        displayedIdsRef.current = new Set([...current.map((n) => n.id), newRootId]);
         const existing = current.find((n) => n.id === newRootId);
         if (existing) {
           return current.map((n) =>
@@ -1009,35 +1255,30 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
           }),
           { minX: 0, maxY: 0 },
         );
-        const rootPos = { x: bbox.minX, y: bbox.maxY + CARD_H + 60 };
         const rootNode: Node = {
           id: newRootId,
           type: "card",
-          position: rootPos,
+          position: { x: bbox.minX, y: bbox.maxY + CARD_H + 60 },
           data: { label: bench.name, isRoot: true, resolved: bench } satisfies NodeData,
           selectable: false,
           style: { cursor: "pointer" },
         };
 
-        const additions = collectNewNodesForBench(
-          bench,
-          current,
-          rootPos,
-          rootNode,
-          displaySettings.nodeWidth,
-          resolveBench,
-        );
-
-        return [...current, rootNode, ...additions];
+        return [...current, rootNode];
       });
 
       setEdgeMeta((current) => {
         const existingIds = new Set(current.map((e) => e.id));
-        const additions = collectNewEdgesForBench(bench, newRootId, existingIds);
-        return [...current, ...additions];
+        const additions = collectEdgesToDisplayedNodes(
+          bench,
+          newRootId,
+          displayedIdsRef.current,
+          existingIds,
+        );
+        return additions.length > 0 ? [...current, ...additions] : current;
       });
     },
-    [resolveBench, displaySettings.nodeWidth],
+    [],
   );
 
   // Removes a selected bench AND every node that was only reachable through
@@ -1049,11 +1290,26 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
   // `externalId` argument is enough to exclude it), since the parent calls
   // this synchronously before its own `benches` prop has had a chance to
   // update.
+  //
+  // One carve-out: a node that ALREADY had no edge before this removal is
+  // kept. The flood-fill starts from the remaining roots and travels along
+  // edges, so an edgeless non-root is never reached and would be swept away
+  // by a removal it has nothing to do with. That used to be unreachable —
+  // every node arrived wired to something — but now that selecting a bench
+  // no longer drags its neighbors in, hiding a node can leave its former
+  // neighbor stranded, and stranded must not mean doomed. The test has to
+  // run against the edges as they were BEFORE filtering: a node whose only
+  // edge pointed at the bench being removed is edgeless in `filtered` too,
+  // and that one genuinely must go.
   const removeBench = useCallback(
     (externalId: string) => {
       const remainingRootIds = new Set([...rootIds].filter((id) => id !== externalId));
       const reachableRef = { current: new Set<string>() };
+      const priorlyConnectedRef = { current: new Set<string>() };
       setEdgeMeta((currentEdges) => {
+        priorlyConnectedRef.current = new Set(
+          currentEdges.flatMap((e) => [e.source, e.target]),
+        );
         const filtered = currentEdges.filter(
           (e) => e.source !== externalId && e.target !== externalId,
         );
@@ -1075,7 +1331,14 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
         reachableRef.current = reachable;
         return filtered.filter((e) => reachable.has(e.source) && reachable.has(e.target));
       });
-      setNodes((current) => current.filter((n) => reachableRef.current.has(n.id)));
+      setNodes((current) =>
+        current.filter(
+          (n) =>
+            n.id !== externalId &&
+            (reachableRef.current.has(n.id) ||
+              !priorlyConnectedRef.current.has(n.id)),
+        ),
+      );
     },
     [rootIds],
   );
@@ -1096,6 +1359,7 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
             kind: e.kind,
             dependencyType: e.dependencyType,
           })),
+          curvature: getAllEdgeCurvatures(),
         };
       },
       addBench,
@@ -1221,7 +1485,12 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
             sharedResourcesCount: resolved ? notShown(resolved.sharedResources) : 0,
             usableByCount: usersOf(n.id).filter(({ bench: u }) => !existingIds.has(u.externalId))
               .length,
-            canHide: !rootIds.has(n.id),
+            // A selected bench can be hidden like any other card. The lone
+            // exception is the last one left: emptying the selection unmounts
+            // the whole diagram (see `InteractionClient`), which would take
+            // the neighbours down with it — the opposite of what hiding a
+            // single card means.
+            canHide: !rootIds.has(n.id) || rootIds.size > 1,
           });
         }}
       >

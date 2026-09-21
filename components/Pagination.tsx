@@ -1,6 +1,8 @@
 "use client";
 
 import clsx from "clsx";
+import ColumnsToggle from "@/components/ColumnsToggle";
+import { ALL_ROWS, ROW_OPTIONS, setDensity, type Rows } from "@/lib/catalogueDensity";
 
 type Props = {
   page: number;
@@ -8,6 +10,9 @@ type Props = {
   pageSize: number;
   totalItems: number;
   onPageChange: (p: number) => void;
+  /** Rows per page, or `"all"`. Present only on the catalogue, which is the
+   * one place the density controls belong. */
+  rows?: Rows;
 };
 
 function computePageSlots(
@@ -46,8 +51,12 @@ export default function Pagination({
   pageSize,
   totalItems,
   onPageChange,
+  rows,
 }: Readonly<Props>) {
-  if (totalPages <= 1) return null;
+  // Deliberately no early return when there is a single page: the density
+  // controls live in this bar, and someone who set 10 rows and then filtered
+  // down to one page would have no way left to get them back.
+  const showPageButtons = totalPages > 1;
   const start = (page - 1) * pageSize + 1;
   const end = Math.min(page * pageSize, totalItems);
   const slots = computePageSlots(page, totalPages);
@@ -66,7 +75,33 @@ export default function Pagination({
       <div className="text-sm text-muted">
         Showing {start}–{end} of {totalItems}
       </div>
-      <div className="flex items-center gap-1">
+      {rows !== undefined && (
+        <div className="flex items-center gap-3">
+          <ColumnsToggle />
+          <label className="flex items-center gap-1 text-xs text-muted">
+            Rows
+            <select
+              value={String(rows)}
+              onChange={(e) =>
+                setDensity({
+                  rows:
+                    e.target.value === ALL_ROWS
+                      ? ALL_ROWS
+                      : Number(e.target.value),
+                })
+              }
+              className="rounded border border-border bg-surface px-2 py-1 text-xs text-fg focus:outline-none focus:border-accent"
+            >
+              {ROW_OPTIONS.map((r) => (
+                <option key={String(r)} value={String(r)}>
+                  {r === ALL_ROWS ? "All" : r}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+      )}
+      <div className={clsx("items-center gap-1", showPageButtons ? "flex" : "hidden")}>
         <button
           type="button"
           onClick={() => onPageChange(page - 1)}

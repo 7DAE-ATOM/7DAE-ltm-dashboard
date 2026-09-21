@@ -15,6 +15,12 @@ export type InteractionSave = {
   rootExternalIds: string[];
   nodes: InteractionSaveNode[];
   edges: InteractionSaveEdge[];
+  /** Hand-dialled edge bows, keyed by edge id — see
+   * `lib/interactionEdgeCurvature.ts`, where they are otherwise session-only.
+   * Optional for the same reason as `dependencyType` above: absent reads back
+   * as "every edge on the global curvature setting", which is exactly what a
+   * save made before this field existed should do. No version bump. */
+  curvature?: Record<string, number>;
   savedAt: string;
 };
 
@@ -181,6 +187,18 @@ function isEdgeArray(value: unknown): value is InteractionSaveEdge[] {
   );
 }
 
+/** Absent or malformed curvature is dropped rather than rejected: it is a
+ * reading comfort, not the diagram, and losing the bows beats refusing the
+ * file. */
+function toCurvature(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, number> = {};
+  for (const [id, offset] of Object.entries(value as UnknownRecord)) {
+    if (typeof offset === "number" && Number.isFinite(offset)) out[id] = offset;
+  }
+  return out;
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string");
 }
@@ -224,6 +242,7 @@ export function parseImportedSave(raw: string): InteractionSave {
       rootExternalIds: [rec.rootExternalId],
       nodes: rec.nodes,
       edges: rec.edges,
+      curvature: toCurvature(rec.curvature),
       savedAt: rec.savedAt,
     };
   }
@@ -236,6 +255,7 @@ export function parseImportedSave(raw: string): InteractionSave {
       rootExternalIds: rec.rootExternalIds,
       nodes: rec.nodes,
       edges: rec.edges,
+      curvature: toCurvature(rec.curvature),
       savedAt: rec.savedAt,
     };
   }

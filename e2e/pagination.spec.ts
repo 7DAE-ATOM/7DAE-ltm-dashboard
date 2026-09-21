@@ -1,8 +1,12 @@
 import { test, expect } from "@playwright/test";
+import { pinDensity } from "./utils";
 
 test.use({ viewport: { width: 1440, height: 900 } });
 
 test.beforeEach(async ({ page }) => {
+  // Pin a small page (3×2 = 6) so a modest dataset still produces more than
+  // one page; at the 5×5 default this suite would just skip.
+  await pinDensity(page, { columns: 3, rows: 2 });
   await page.goto("/");
   await expect(
     page.getByPlaceholder("Search lab test means, references, managers…"),

@@ -1,57 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import FilterBar, { type FilterValue } from "./FilterBar";
-import type {
-  AircraftStructureNode,
-  LabTestMeanStatus,
-  LabTestMeanType,
-} from "@/lib/types";
+import FilterBar from "./FilterBar";
+import { countActiveFilters } from "@/lib/appFilters";
 
-type Props = {
-  types: LabTestMeanType[];
-  statuses: LabTestMeanStatus[];
-  countries: string[];
-  tree: AircraftStructureNode[];
-  programCounts: Map<string, number>;
-  hasUnassignedPrograms: boolean;
-  complexities: string[];
-  portfolios: string[];
-  value: FilterValue;
-  onChange: (v: FilterValue) => void;
-  count: number;
-  /** Extra content rendered right after `FilterBar` in the sheet body — e.g.
-   * Dependency View's per-bench visibility list. Optional so Catalogue/Map
-   * are unaffected. */
-  extraContent?: React.ReactNode;
-};
+/** Everything `FilterBar` takes, forwarded untouched, plus the result count
+ * for the footer button. The sheet deliberately has no props of its own
+ * beyond that: it and the desktop panel must never offer different filters.
+ *
+ * `extraContent` is gone — the per-bench visibility list it used to inject on
+ * `/depview` is now a chapter of `FilterBar` itself, so mobile gets it the
+ * same way desktop does. */
+type Props = ComponentProps<typeof FilterBar> & { count: number };
 
-export default function FilterSheet({
-  types,
-  statuses,
-  countries,
-  tree,
-  programCounts,
-  hasUnassignedPrograms,
-  complexities,
-  portfolios,
-  value,
-  onChange,
-  count,
-  extraContent,
-}: Readonly<Props>) {
+export default function FilterSheet({ count, ...bar }: Readonly<Props>) {
   const [open, setOpen] = useState(false);
-  const activeCount =
-    value.types.length +
-    value.statuses.length +
-    value.countries.length +
-    value.programNodeIds.length +
-    value.complexities.length +
-    value.portfolios.length +
-    (value.search ? 1 : 0) +
-    (value.photo === "all" ? 0 : 1) +
-    (value.qualitySeal === "all" ? 0 : 1);
+  // Same arithmetic as the panel's "Clear All" visibility and the chapter
+  // badges — this used to be a third, independently-maintained copy.
+  const activeCount = countActiveFilters(bar.value);
   return (
     <>
       <button
@@ -94,19 +61,7 @@ export default function FilterSheet({
                   Close
                 </button>
               </div>
-              <FilterBar
-                types={types}
-                statuses={statuses}
-                countries={countries}
-                tree={tree}
-                programCounts={programCounts}
-                hasUnassignedPrograms={hasUnassignedPrograms}
-                complexities={complexities}
-                portfolios={portfolios}
-                value={value}
-                onChange={onChange}
-              />
-              {extraContent}
+              <FilterBar {...bar} />
               <button
                 type="button"
                 onClick={() => setOpen(false)}

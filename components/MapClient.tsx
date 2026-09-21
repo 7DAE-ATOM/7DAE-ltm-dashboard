@@ -1,13 +1,12 @@
 "use client";
 
-import { useMemo, useState } from "react";
 import dynamic from "next/dynamic";
-import FilterBar, { type FilterValue } from "@/components/FilterBar";
+import FilterPanel from "@/components/FilterPanel";
 import FilterSheet from "@/components/FilterSheet";
 import ExportPdfButton from "@/components/ExportPdfButton";
-import { filterLabTestMeans } from "@/lib/labtestmeans";
-import { expandSelection } from "@/lib/aircraftStructure";
 import { useLabTestMeans } from "@/lib/useLabTestMeans";
+import { useFilteredLabTestMeans } from "@/lib/useFilteredLabTestMeans";
+import { useSharedFilters, setFilters, clearFilters } from "@/lib/appFilters";
 import { useExportPdf } from "@/lib/useExportPdf";
 
 const MapView = dynamic(() => import("@/components/MapView"), { ssr: false });
@@ -76,29 +75,13 @@ function MapLoaded({
   complexities,
   portfolios,
 }: Readonly<LoadedProps>) {
-  const [filters, setFilters] = useState<FilterValue>({
-    search: "",
-    photo: "all",
-    qualitySeal: "all",
-    types: [],
-    statuses: [],
-    countries: [],
-    programNodeIds: [],
-    complexities: [],
-    portfolios: [],
-  });
-
-  const visible = useMemo(() => {
-    const { names, includeUnassigned } = expandSelection(
-      tree,
-      filters.programNodeIds,
-    );
-    return filterLabTestMeans(labTestMeans, {
-      ...filters,
-      programNodeNames: names,
-      includeUnassignedPrograms: includeUnassigned,
-    });
-  }, [labTestMeans, tree, filters]);
+  // Shared with `/` and `/depview` — see `lib/appFilters.ts`.
+  const { filters, resetToken } = useSharedFilters();
+  const { selectable, visible, countUnder } = useFilteredLabTestMeans(
+    labTestMeans,
+    tree,
+    filters,
+  );
 
   const { isExporting, handleExportPdf } = useExportPdf({
     visible,
@@ -106,6 +89,34 @@ function MapLoaded({
     filters,
     tree,
   });
+
+  // One object for the desktop panel and the mobile sheet — see CatalogueClient.
+  const barProps = {
+    types,
+    statuses,
+    countries,
+    tree,
+    programCounts,
+    hasUnassignedPrograms,
+    complexities,
+    portfolios,
+    value: filters,
+    onChange: setFilters,
+    onClear: clearFilters,
+    programResetToken: resetToken,
+    selectableBenches: selectable,
+    previewCount: countUnder,
+    // The ACTIONS block is the catalogue's; the map keeps only its PDF export,
+    // which predates it and must not regress.
+    actions: (
+      <ExportPdfButton
+        count={visible.length}
+        disabled={visible.length === 0 || isExporting}
+        isExporting={isExporting}
+        onClick={handleExportPdf}
+      />
+    ),
+  };
 
   return (
     <div className="relative h-[calc(100vh-57px)]">
@@ -119,50 +130,14 @@ function MapLoaded({
           </div>
         </div>
       )}
-      <div className="absolute top-4 left-4 w-[340px] max-h-[calc(100vh-100px)] glass-panel p-5 overflow-y-auto z-10 hidden lg:block">
-        <div className="mb-3 text-xs text-muted font-mono">
-          {visible.length} / {labTestMeans.length} lab test means
-        </div>
-        <FilterBar
-          types={types}
-          statuses={statuses}
-          countries={countries}
-          tree={tree}
-          programCounts={programCounts}
-          hasUnassignedPrograms={hasUnassignedPrograms}
-          complexities={complexities}
-          portfolios={portfolios}
-          value={filters}
-          onChange={setFilters}
-        />
-        <ExportPdfButton
-          count={visible.length}
-          disabled={visible.length === 0 || isExporting}
-          isExporting={isExporting}
-          onClick={handleExportPdf}
-        />
-      </div>
-      <FilterSheet
-        types={types}
-        statuses={statuses}
-        countries={countries}
-        tree={tree}
-        programCounts={programCounts}
-        hasUnassignedPrograms={hasUnassignedPrograms}
-        complexities={complexities}
-        portfolios={portfolios}
-        value={filters}
-        onChange={setFilters}
+      {/* `lg:flex`, not `lg:block` — see the note on FilterPanel.className. */}
+      <FilterPanel
+        {...barProps}
         count={visible.length}
-        extraContent={
-          <ExportPdfButton
-            count={visible.length}
-            disabled={visible.length === 0 || isExporting}
-            isExporting={isExporting}
-            onClick={handleExportPdf}
-          />
-        }
+        total={labTestMeans.length}
+        className="absolute left-4 top-4 z-10 hidden lg:flex w-[340px] max-h-[calc(100vh-100px)]"
       />
+      <FilterSheet {...barProps} count={visible.length} />
     </div>
   );
 }

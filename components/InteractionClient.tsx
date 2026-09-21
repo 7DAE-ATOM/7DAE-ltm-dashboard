@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useLabTestMeans } from "@/lib/useLabTestMeans";
@@ -19,6 +19,7 @@ import {
   writeSave,
   type InteractionSave,
 } from "@/lib/interactionSaves";
+import { consumeSeedIds } from "@/lib/depgraphSeed";
 
 const DependencyGraph = dynamic(
   () => import("@/components/interaction/DependencyGraph"),
@@ -50,7 +51,37 @@ export default function InteractionClient() {
   const [pendingLoad, setPendingLoad] = useState<InteractionSave | null>(null);
   const [saveVersion, setSaveVersion] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [seedExpired, setSeedExpired] = useState(false);
   const graphRef = useRef<DependencyGraphHandle>(null);
+
+  /* A `?seed=<token>` arrives from the catalogue when the selection was too
+   * large to put in the URL. It is converted straight into the canonical
+   * `?ids=` form rather than kept as state: on this page `?ids=` IS the live
+   * selection, so after this one `replace` every existing code path applies
+   * unchanged.
+   *
+   * The ref guards against StrictMode's double mount; `consumeSeedIds` also
+   * memoizes, so a second read still resolves. */
+  const seedParam = searchParams.get("seed");
+  const seedConsumedRef = useRef(false);
+  useEffect(() => {
+    if (!seedParam || seedConsumedRef.current) return;
+    seedConsumedRef.current = true;
+    const ids = consumeSeedIds(seedParam);
+    if (!ids) {
+      // Unknown, malformed or expired: say so rather than showing an empty
+      // diagram that looks like the link simply did nothing.
+      setSeedExpired(true);
+    }
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("seed");
+    params.delete("id");
+    if (ids?.length) params.set("ids", ids.join(","));
+    const query = params.toString();
+    router.replace(query ? `/depgraph?${query}` : "/depgraph", {
+      scroll: false,
+    });
+  }, [seedParam, searchParams, router]);
 
   // Stable references — an inline arrow function here would get a new
   // identity on every render (e.g. right after `handleSaveAs` itself calls
@@ -113,6 +144,24 @@ export default function InteractionClient() {
         graphRef.current?.removeBench(id);
       }
       updateSelectionUrl(next);
+    },
+    [selectedIds, updateSelectionUrl],
+  );
+
+  /**
+   * The diagram hid a selected bench from its context menu. It has already
+   * taken the card and its edges off the canvas, so all that is left here is
+   * to drop it from the selection — the chip has to go with the card.
+   *
+   * Pointedly NOT `handleRemoveBench`: that one calls into `removeBench`,
+   * which cascades and would take the hidden bench's neighbours with it.
+   * Hiding is meant to leave them exactly where they are.
+   */
+  const handleRootHidden = useCallback(
+    (id: string) => {
+      setActiveSaveName(null);
+      setDirty(false);
+      updateSelectionUrl(selectedIds.filter((x) => x !== id));
     },
     [selectedIds, updateSelectionUrl],
   );
@@ -254,6 +303,25 @@ export default function InteractionClient() {
           <DisplaySettingsControl />
         </div>
       </div>
+      {seedExpired && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-sm text-fg"
+        >
+          <span>
+            That link has expired — selections opened from the catalogue stay
+            valid for 30 minutes, and each link can only be opened once. Open
+            it again from the catalogue.
+          </span>
+          <button
+            type="button"
+            onClick={() => setSeedExpired(false)}
+            className="shrink-0 text-xs text-muted underline underline-offset-2 hover:text-accent"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="relative flex-1">
         {selectedBenches.length > 0 ? (
           <DependencyGraph
@@ -263,6 +331,7 @@ export default function InteractionClient() {
             onDirty={handleDirty}
             pendingLoad={pendingLoad}
             onPendingLoadConsumed={handlePendingLoadConsumed}
+            onRootHidden={handleRootHidden}
           />
         ) : (
           <InteractionEmptyState reason="no-selection" />

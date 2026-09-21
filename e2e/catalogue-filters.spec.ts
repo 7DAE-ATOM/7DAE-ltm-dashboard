@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { openSection, pinDensity } from "./utils";
 
 // FilterBar is mounted twice (desktop sidebar + mobile FilterSheet); forcing
 // a desktop viewport keeps only the sidebar instance interactive and avoids
@@ -15,6 +16,9 @@ async function readCount(page: Page): Promise<{ shown: number; total: number }> 
 }
 
 test.beforeEach(async ({ page }) => {
+  // Pin 3×2 so the per-page arithmetic below stays 6, independent of the
+  // 5×5 default.
+  await pinDensity(page, { columns: 3, rows: 2 });
   await page.goto("/");
   await expect(
     page.getByPlaceholder("Search lab test means, references, managers…"),
@@ -24,6 +28,7 @@ test.beforeEach(async ({ page }) => {
 test("a photo filter narrows or keeps the result count, never grows it", async ({ page }) => {
   const before = await readCount(page);
 
+  await openSection(page, "Photo");
   await page
     .getByRole("radiogroup", { name: "Photo filter" })
     .getByRole("radio", { name: "With photo" })
@@ -37,18 +42,20 @@ test("a photo filter narrows or keeps the result count, never grows it", async (
   if (after.shown === 0) {
     await expect(page.getByText("No lab test mean matches these filters.")).toBeVisible();
   } else {
-    // The catalogue paginates at 6 per page, so the DOM count caps there.
+    // Density pinned to 3 columns × 2 rows above, so a page holds 6.
     await expect(cards).toHaveCount(Math.min(after.shown, 6));
   }
 });
 
 test("combining two filters never shows more results than either alone", async ({ page }) => {
+  await openSection(page, "Photo");
   await page
     .getByRole("radiogroup", { name: "Photo filter" })
     .getByRole("radio", { name: "With photo" })
     .click();
   const afterPhoto = await readCount(page);
 
+  await openSection(page, "Quality seal");
   await page
     .getByRole("radiogroup", { name: "Quality seal filter" })
     .getByRole("radio", { name: "Released" })

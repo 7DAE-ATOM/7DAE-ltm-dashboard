@@ -114,6 +114,26 @@ export function filterLabTestMeans(
   return list.filter((m) => FILTER_PREDICATES.every((matches) => matches(m, f)));
 }
 
+/**
+ * The second, finer-grained refinement step: benches the user ticked off
+ * one by one in the "Displayed LTM" chapter.
+ *
+ * Deliberately NOT one of `FILTER_PREDICATES`, although `excludedIds` does
+ * live inside `FilterValue` like every other axis. The chapter has to offer
+ * the user the benches that the *coarse* filters kept — including the ones
+ * already excluded, or unticking would be impossible. So the two steps have
+ * to stay separable, and `lib/useFilteredLabTestMeans.ts` applies them in
+ * order: `filterLabTestMeans` gives the candidates, this gives what is shown.
+ */
+export function excludeBenches(
+  list: LabTestMean[],
+  excludedIds: readonly string[] | undefined,
+): LabTestMean[] {
+  if (!excludedIds?.length) return list;
+  const excluded = new Set(excludedIds);
+  return list.filter((m) => !excluded.has(m.externalId));
+}
+
 export function uniqueCountries(list: LabTestMean[]): string[] {
   return Array.from(new Set(list.map((m) => m.location.country))).sort((a, b) =>
     a.localeCompare(b),
