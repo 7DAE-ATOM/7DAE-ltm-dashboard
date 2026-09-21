@@ -76,6 +76,10 @@ type Props = {
    * holds the selection, hence the callback. Deliberately NOT the parent's
    * `removeBench` path: that one cascades, and hiding must not. */
   onRootHidden: (externalId: string) => void;
+  /** How many cards are on the canvas. The parent keeps the diagram mounted
+   * while this is non-zero, even with an empty selection — hiding the last
+   * selected bench must not take its neighbours down with it. */
+  onNodeCountChange: (count: number) => void;
 };
 
 export type DependencyGraphHandle = {
@@ -801,7 +805,15 @@ function collectEdgesToDisplayedNodes(
 }
 
 const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function DependencyGraph(
-  { benches, allBenches, onDirty, pendingLoad, onPendingLoadConsumed, onRootHidden },
+  {
+    benches,
+    allBenches,
+    onDirty,
+    pendingLoad,
+    onPendingLoadConsumed,
+    onRootHidden,
+    onNodeCountChange,
+  },
   ref,
 ) {
   const [hidden, setHidden] = useState<Record<EdgeColorKind, boolean>>({
@@ -882,6 +894,13 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
     (save: InteractionSave) => {
       const saveRootIds = new Set(save.rootExternalIds);
       isBaselineUpdateRef.current = true;
+      // Pushed here rather than left to the effect below, and the timing is
+      // load-bearing for a save with no root: consuming `pendingLoad` and
+      // applying the save land in the SAME batch, so the parent re-renders
+      // with `pendingLoad === null` before any effect has run. Were the count
+      // still 0 at that moment, the parent's mount test would fail and the
+      // diagram would unmount, taking these very nodes with it.
+      onNodeCountChange(save.nodes.length);
       // Before the nodes and edges, so an edge whose component mounts on this
       // very render already reads its bow through `getSnapshot`. Absent on a
       // save made before the field existed — `{}` puts every edge back on
@@ -918,7 +937,7 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
         })),
       );
     },
-    [byExternalId],
+    [byExternalId, onNodeCountChange],
   );
 
   // Initial ELK layout resolves (mount only — there's nothing else that can
@@ -972,6 +991,12 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingLoad, rootIds, onPendingLoadConsumed, applyLoadedSave]);
+
+  // Deliberately NOT gated by `isBaselineUpdateRef`: that flag silences the
+  // dirty signal, not this one. The parent needs the count after a load too.
+  useEffect(() => {
+    onNodeCountChange(nodes.length);
+  }, [nodes.length, onNodeCountChange]);
 
   // Any change to the displayed graph that wasn't one of the baseline resets
   // above (i.e. a drag, an expansion, or a hide) means there are unsaved
@@ -1101,10 +1126,11 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
    * where it is. Hiding says "I don't want to look at this card", not "undo
    * everything it brought".
    *
-   * A selected bench can be hidden too. It then also leaves the selection, via
-   * `onRootHidden`, because a chip for a card that is no longer on the diagram
-   * would be a lie. Its neighbours still stay. The one exception is the last
-   * remaining selection — see `canHide` where the menu item is built.
+   * A selected bench can be hidden too — any card can. It then also leaves
+   * the selection, via `onRootHidden`, because a chip for a card that is no
+   * longer on the diagram would be a lie. Hiding the LAST selected bench is
+   * allowed as well: the parent keeps the diagram mounted while it still has
+   * cards (see `onNodeCountChange`), so the orphaned neighbours stay put.
    */
   const handleHide = useCallback(
     (nodeId: string) => {
@@ -1485,12 +1511,6 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
             sharedResourcesCount: resolved ? notShown(resolved.sharedResources) : 0,
             usableByCount: usersOf(n.id).filter(({ bench: u }) => !existingIds.has(u.externalId))
               .length,
-            // A selected bench can be hidden like any other card. The lone
-            // exception is the last one left: emptying the selection unmounts
-            // the whole diagram (see `InteractionClient`), which would take
-            // the neighbours down with it — the opposite of what hiding a
-            // single card means.
-            canHide: !rootIds.has(n.id) || rootIds.size > 1,
           });
         }}
       >

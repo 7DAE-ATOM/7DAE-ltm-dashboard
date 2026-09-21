@@ -52,6 +52,13 @@ export default function InteractionClient() {
   const [saveVersion, setSaveVersion] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [seedExpired, setSeedExpired] = useState(false);
+  /* Cards currently on the canvas, pushed up by the diagram. The selection
+   * alone is no longer enough to decide whether to render it: hiding the last
+   * selected bench empties the selection while leaving its neighbours behind,
+   * and those must not vanish with it. `setGraphNodeCount` is passed to the
+   * graph directly — a `useState` setter has a stable identity, which is what
+   * the callbacks below are hand-wrapped in `useCallback` to achieve. */
+  const [graphNodeCount, setGraphNodeCount] = useState(0);
   const graphRef = useRef<DependencyGraphHandle>(null);
 
   /* A `?seed=<token>` arrives from the catalogue when the selection was too
@@ -138,10 +145,14 @@ export default function InteractionClient() {
       const next = selectedIds.filter((x) => x !== id);
       setActiveSaveName(null);
       setDirty(false);
-      // Only bother mutating the (about to unmount) diagram if the selection
-      // will still be non-empty afterward.
       if (next.length > 0) {
         graphRef.current?.removeBench(id);
+      } else {
+        // Taking the last chip away clears the board, as it always has.
+        // Without this the diagram would now stay mounted on the strength of
+        // its leftover cards — that leniency is for `Hide`, which is about
+        // one card, not for "I am done with this selection".
+        setGraphNodeCount(0);
       }
       updateSelectionUrl(next);
     },
@@ -168,7 +179,9 @@ export default function InteractionClient() {
 
   const handleSaveAs = useCallback(
     (name: string) => {
-      if (selectedBenches.length === 0) return; // SaveLoadControls disables Save/Save-as in this case
+      // `getSnapshot` already returns null on an empty canvas, which is the
+      // real precondition — a diagram with cards but no selected bench is
+      // saveable.
       const snapshot = graphRef.current?.getSnapshot();
       if (!snapshot) return;
       const ok = writeSave(name, {
@@ -207,7 +220,10 @@ export default function InteractionClient() {
       const rootBenches = save.rootExternalIds
         .map((id) => labTestMeans.find((m) => m.externalId === id))
         .filter((m): m is LabTestMean => !!m);
-      if (rootBenches.length === 0) {
+      // A save can legitimately have no root at all (every selected bench was
+      // hidden before saving). Only complain when it HAD roots and none of
+      // them survive in the catalogue.
+      if (save.rootExternalIds.length > 0 && rootBenches.length === 0) {
         setSaveError("None of this save's root benches exist in the catalogue anymore.");
         return;
       }
@@ -290,7 +306,7 @@ export default function InteractionClient() {
             dirty={dirty}
             saves={saves}
             errorMessage={saveError}
-            disableSave={selectedBenches.length === 0}
+            disableSave={graphNodeCount === 0}
             onSaveAs={handleSaveAs}
             onSave={handleSave}
             onLoad={handleLoadSave}
@@ -323,7 +339,14 @@ export default function InteractionClient() {
         </div>
       )}
       <div className="relative flex-1">
-        {selectedBenches.length > 0 ? (
+        {/* `pendingLoad` belongs in this test, and it is not redundant: the
+            effect that applies a save lives INSIDE the diagram, so a save
+            whose `rootExternalIds` is empty (every selected bench was hidden
+            before saving) would leave the selection empty, the canvas empty,
+            the diagram unmounted — and the load would silently never run.
+            The content of a save is only knowable once the component holding
+            it exists, so the intent to load has to be enough to mount it. */}
+        {selectedBenches.length > 0 || graphNodeCount > 0 || pendingLoad !== null ? (
           <DependencyGraph
             ref={graphRef}
             benches={selectedBenches}
@@ -332,6 +355,7 @@ export default function InteractionClient() {
             pendingLoad={pendingLoad}
             onPendingLoadConsumed={handlePendingLoadConsumed}
             onRootHidden={handleRootHidden}
+            onNodeCountChange={setGraphNodeCount}
           />
         ) : (
           <InteractionEmptyState reason="no-selection" />
