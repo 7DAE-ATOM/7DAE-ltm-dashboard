@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { InteractionSave } from "@/lib/interactionSaves";
 import { parseImportedSave } from "@/lib/interactionSaves";
 
@@ -10,6 +10,10 @@ type Props = {
   saves: string[];
   errorMessage: string | null;
   disableSave?: boolean;
+  /** Rendered between the save disk and the `…` menu. A slot rather than an
+   * export prop: this component has no business knowing what an image export
+   * is, and the alternative was splitting it in two just for placement. */
+  middleSlot?: ReactNode;
   onSaveAs: (name: string) => void;
   onSave: () => void;
   onLoad: (name: string) => void;
@@ -26,6 +30,7 @@ export default function SaveLoadControls({
   saves,
   errorMessage,
   disableSave = false,
+  middleSlot,
   onSaveAs,
   onSave,
   onLoad,
@@ -120,6 +125,8 @@ export default function SaveLoadControls({
       >
         <SaveIcon />
       </button>
+
+      {middleSlot}
 
       <button
         type="button"

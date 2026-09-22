@@ -1,6 +1,17 @@
 import type { EdgeColorKind } from "@/components/interaction/DependencyGraph";
+import { downloadBlob } from "@/lib/downloadBlob";
 
-export type InteractionSaveNode = { id: string; x: number; y: number };
+export type InteractionSaveNode = {
+  id: string;
+  x: number;
+  y: number;
+  /** Absent unless the user resized this card by dragging one of its vertical
+   * edges — absent reads back as "follow the global `nodeWidth` display
+   * setting", which is what a save made before per-card widths existed should
+   * do. Optional for the same reason as `dependencyType` and `curvature`
+   * below: no version bump, no migration. */
+  width?: number;
+};
 export type InteractionSaveEdge = {
   source: string;
   target: string;
@@ -131,8 +142,12 @@ export function deleteSave(name: string): void {
   writeIndex(readIndex().filter((n) => n !== name));
 }
 
-function sanitizeFilename(name: string): string {
-  return name.replaceAll(/[\\/:*?"<>|]/g, "_").trim() || "diagram";
+/** Strips the characters Windows and POSIX refuse in a filename. Falls back
+ * to a neutral name rather than producing an empty one, which would leave the
+ * file called just its extension. Exported because an image export names
+ * itself after the active save too. */
+export function sanitizeFilename(name: string): string {
+  return name.replaceAll(/[\/:*?"<>|]/g, "_").trim() || "diagram";
 }
 
 /** Downloads `data` as a `.json` file named after `name` — lets a user share
@@ -140,14 +155,7 @@ function sanitizeFilename(name: string): string {
  * otherwise never leave this browser's `localStorage`. */
 export function downloadInteractionSave(name: string, data: InteractionSave): void {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${sanitizeFilename(name)}.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, `${sanitizeFilename(name)}.json`);
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -161,7 +169,11 @@ function isNodeArray(value: unknown): value is InteractionSaveNode[] {
       return (
         typeof rec.id === "string" &&
         typeof rec.x === "number" &&
-        typeof rec.y === "number"
+        typeof rec.y === "number" &&
+        // Absent is the norm; present but nonsensical (hand-edited file) is
+        // rejected outright rather than silently drawn as a zero-width card.
+        (rec.width === undefined ||
+          (typeof rec.width === "number" && Number.isFinite(rec.width) && rec.width > 0))
       );
     })
   );

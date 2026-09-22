@@ -20,6 +20,13 @@ import {
   type InteractionSave,
 } from "@/lib/interactionSaves";
 import { consumeSeedIds } from "@/lib/depgraphSeed";
+import DiagramExportMenu, {
+  type ExportFormat,
+} from "@/components/interaction/DiagramExportMenu";
+import { ImageExportTooLargeError } from "@/lib/diagramImageExport";
+import { toMermaid } from "@/lib/diagramMermaid";
+import { downloadBlob, exportDateStamp } from "@/lib/downloadBlob";
+import { sanitizeFilename } from "@/lib/interactionSaves";
 
 const DependencyGraph = dynamic(
   () => import("@/components/interaction/DependencyGraph"),
@@ -59,6 +66,9 @@ export default function InteractionClient() {
    * graph directly — a `useState` setter has a stable identity, which is what
    * the callbacks below are hand-wrapped in `useCallback` to achieve. */
   const [graphNodeCount, setGraphNodeCount] = useState(0);
+  /** Doubles as the busy flag and as which format is in flight. */
+  const [exporting, setExporting] = useState<ExportFormat | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const graphRef = useRef<DependencyGraphHandle>(null);
 
   /* A `?seed=<token>` arrives from the catalogue when the selection was too
@@ -175,6 +185,48 @@ export default function InteractionClient() {
       updateSelectionUrl(selectedIds.filter((x) => x !== id));
     },
     [selectedIds, updateSelectionUrl],
+  );
+
+  /**
+   * PNG and SVG capture the canvas; Mermaid rebuilds it from the model. Two
+   * unrelated mechanisms, one menu — hence the switch rather than a single
+   * generator.
+   *
+   * Nothing here is the `…` menu's "Export", which downloads the save file so
+   * the diagram can come back into this app. This one produces something for
+   * the outside world.
+   */
+  const handleExport = useCallback(
+    async (format: ExportFormat) => {
+      setExportError(null);
+      setExporting(format);
+      try {
+        const base = `${sanitizeFilename(activeSaveName ?? "depgraph")}-${exportDateStamp()}`;
+        if (format === "mermaid") {
+          const model = graphRef.current?.getGraphModel();
+          if (!model) return;
+          const blob = new Blob([toMermaid(model)], {
+            type: "text/plain;charset=utf-8",
+          });
+          downloadBlob(blob, `${base}.mmd`);
+          return;
+        }
+        const blob = await graphRef.current?.exportImage(format);
+        if (!blob) return;
+        downloadBlob(blob, `${base}.${format}`);
+      } catch (e) {
+        // A refused PNG is an expected outcome on a huge graph, not a bug: it
+        // gets a message that points at the formats which do scale.
+        setExportError(
+          e instanceof ImageExportTooLargeError
+            ? e.message
+            : `Export failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      } finally {
+        setExporting(null);
+      }
+    },
+    [activeSaveName],
   );
 
   const handleSaveAs = useCallback(
@@ -302,6 +354,13 @@ export default function InteractionClient() {
         </div>
         <div className="flex items-center gap-1.5">
           <SaveLoadControls
+            middleSlot={
+              <DiagramExportMenu
+                disabled={graphNodeCount === 0}
+                busy={exporting}
+                onExport={(format) => void handleExport(format)}
+              />
+            }
             activeSaveName={activeSaveName}
             dirty={dirty}
             saves={saves}
@@ -332,6 +391,21 @@ export default function InteractionClient() {
           <button
             type="button"
             onClick={() => setSeedExpired(false)}
+            className="shrink-0 text-xs text-muted underline underline-offset-2 hover:text-accent"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      {exportError && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-fg"
+        >
+          <span>{exportError}</span>
+          <button
+            type="button"
+            onClick={() => setExportError(null)}
             className="shrink-0 text-xs text-muted underline underline-offset-2 hover:text-accent"
           >
             Dismiss

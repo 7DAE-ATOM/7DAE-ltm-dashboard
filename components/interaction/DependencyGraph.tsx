@@ -1,8 +1,10 @@
 "use client";
 
 import {
+  createContext,
   forwardRef,
   useCallback,
+  useContext,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -34,11 +36,21 @@ import type {
   LabTestMean,
   LabTestMeanStatus,
 } from "@/lib/types";
+import {
+  dependencyStrokeStyle,
+  resolveDependencyType,
+} from "@/lib/dependencyEdgeStyle";
+import ResizeHorizontalIcon from "@/components/icons/ResizeHorizontalIcon";
 import DependencyLegend from "./DependencyLegend";
 import InteractionEmptyState from "./InteractionEmptyState";
 import BenchPreviewModal, { type PreviewTarget } from "./BenchPreviewModal";
 import NodeContextMenu, { type NodeContextMenuTarget } from "./NodeContextMenu";
 import { useElkLayout, type ElkPositions } from "./useElkLayout";
+import {
+  captureViewport,
+  type CaptureBounds,
+} from "@/lib/diagramImageExport";
+import type { DiagramSnapshot } from "@/lib/diagramMermaid";
 import {
   useInteractionDisplaySettings,
   EDGE_CURVATURE_NEUTRAL,
@@ -90,6 +102,12 @@ export type DependencyGraphHandle = {
   } | null;
   addBench: (bench: LabTestMean) => void;
   removeBench: (externalId: string) => void;
+  /** Renders the canvas to an image. Read-only: the capture never touches the
+   * on-screen zoom or pan. */
+  exportImage: (format: "png" | "svg") => Promise<Blob>;
+  /** A flat description of what is drawn, for the Mermaid exporter. Relation
+   * kinds switched off in the legend are already filtered out. */
+  getGraphModel: () => DiagramSnapshot;
 };
 
 /**
@@ -105,7 +123,24 @@ type NodeData = {
   label: string;
   isRoot: boolean;
   resolved: LabTestMean | null;
+  /** Set only once the user has dragged one of this card's vertical edges.
+   * Absent means "follow the global `nodeWidth` display setting" — which is
+   * what makes an untouched card track that slider and a resized one ignore
+   * it, with no extra bookkeeping. Always read through `widthOf`. */
+  width?: number;
 };
+
+/** How a card reports a resize drag back to the graph.
+ *
+ * A context rather than a closure in each node's `data`: the handler is the
+ * same for every card, and putting it in `data` would force all five
+ * node-construction sites (initial build, load, expansion, "Usable by",
+ * `addBench`) to carry it, and every `data` rebuild to re-attach it. React
+ * Flow already hands a custom node its own `id`, which is the only thing that
+ * differs per card. */
+const ResizeContext = createContext<(nodeId: string, edge: "left" | "right", proposedWidth: number) => void>(
+  () => {},
+);
 
 /**
  * Business rule: an "A depends-on B" relation always exists as a mirrored
@@ -130,11 +165,26 @@ type EdgeData = {
   kind: EdgeColorKind;
 };
 
-// Card width is user-configurable (see `useInteractionDisplaySettings` /
-// "Box width" in `DisplaySettingsControl`); only height is fixed. Same size
-// for every card, root included — a root is distinguished from a plain
-// neighbor only by border thickness, not by a larger footprint.
+// Card height is fixed; width is per-card (see `NodeData.width` and
+// `ResizeHandle`), defaulting to the user-configurable "Box width" setting
+// (`useInteractionDisplaySettings` / `DisplaySettingsControl`). Root cards get
+// no larger a footprint — a root is distinguished by border thickness only.
 const CARD_H = 60;
+
+/** Floor for a hand-resized card: below this the status icon and the quality
+ * seal start colliding with the name. Deliberately lower than the global
+ * slider's own floor (`NODE_WIDTH_MIN`, 160) — resizing one card by hand is a
+ * finer instrument than moving every card at once, so it may go narrower. */
+const MIN_CARD_WIDTH = 120;
+
+/** A card's live box, as the edge builder needs it. */
+type NodeGeometry = { x: number; y: number; width: number };
+
+/** A card's width: its own if the user resized it, the global default
+ * otherwise. The single place that rule is spelled out. */
+function widthOf(node: Node, defaultWidth: number): number {
+  return (node.data as NodeData | undefined)?.width ?? defaultWidth;
+}
 
 type RelationGroup = { kind: DependencyRelationKind; list: DependencyRelation[] };
 
@@ -168,19 +218,6 @@ function borderPoint(
   return { x: cx + dx * scale, y: cy + dy * scale };
 }
 
-const LABEL_MAX_CHARS = 20;
-const LABEL_TRUNCATED_CHARS = 17;
-
-/** Fixed-length label so every card renders at the exact size ELK was told
- * to reserve for it — an auto-sized card (long text = wide box) would drift
- * from the box ELK/`borderPoint()` assumed, which is what made edges land
- * short of or past the real card border. */
-function truncateLabel(label: string): string {
-  return label.length > LABEL_MAX_CHARS
-    ? `${label.slice(0, LABEL_TRUNCATED_CHARS)}...`
-    : label;
-}
-
 // Same icon/color per status as the lifecycle timeline on the detail page
 // (`STEPS` in `components/detail/LifecycleSection.tsx`), so the diagram reads
 // consistently with the rest of the app: kickoff=accent, in-service=success,
@@ -207,9 +244,67 @@ function resolveNodeColorVar(data: NodeData): string {
   return "var(--color-accent)";
 }
 
-function NodeCard({ data }: Readonly<{ data: NodeData }>) {
+/** One vertical-edge resize handle: an invisible hit-zone (`nodrag`, same
+ * opt-out the card title uses, so the shared `pointerdown` doesn't also start
+ * an xyflow node move) that shows a resize cursor and icon on hover, and
+ * drives `onResize` via native pointer events while the button is held.
+ *
+ * The move/up listeners go on `document`, not the element: that is what makes
+ * a release outside the window — or outside the canvas — still end the drag. */
+function ResizeHandle({
+  nodeId,
+  edge,
+  currentWidth,
+}: Readonly<{ nodeId: string; edge: "left" | "right"; currentWidth: number }>) {
+  const onResize = useContext(ResizeContext);
+  const [hovering, setHovering] = useState(false);
+  const dragRef = useRef<{ startClientX: number; startWidth: number } | null>(null);
+
+  function onPointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { startClientX: e.clientX, startWidth: currentWidth };
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      if (!dragRef.current) return;
+      const delta = moveEvent.clientX - dragRef.current.startClientX;
+      const signedDelta = edge === "right" ? delta : -delta;
+      onResize(nodeId, edge, dragRef.current.startWidth + signedDelta);
+    };
+    const onPointerUp = () => {
+      dragRef.current = null;
+      document.removeEventListener("pointermove", onPointerMove);
+      document.removeEventListener("pointerup", onPointerUp);
+    };
+    document.addEventListener("pointermove", onPointerMove);
+    document.addEventListener("pointerup", onPointerUp);
+  }
+
+  return (
+    <div
+      className="nodrag absolute top-0 bottom-0 z-10 flex items-center justify-center"
+      // An edit affordance, not content. Unlike the edge curvature handle,
+      // which only exists in the DOM while hovered, this one is always
+      // mounted — so image exports have to be told to drop it (see
+      // `lib/diagramImageExport.ts`).
+      data-export-hide=""
+      style={{ [edge]: -5, width: 10, cursor: "ew-resize" }}
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
+      onPointerDown={onPointerDown}
+    >
+      {hovering && (
+        <div className="rounded-full bg-accent text-bg p-0.5 shadow">
+          <ResizeHorizontalIcon size={10} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NodeCard({ id, data }: Readonly<{ id: string; data: NodeData }>) {
   const displaySettings = useInteractionDisplaySettings();
-  const width = displaySettings.nodeWidth;
+  const width = data.width ?? displaySettings.nodeWidth;
   const colorVar = resolveNodeColorVar(data);
   return (
     <div
@@ -255,6 +350,8 @@ function NodeCard({ data }: Readonly<{ data: NodeData }>) {
       <Handle type="source" position={Position.Right} style={{ visibility: "hidden" }} />
       <Handle type="target" position={Position.Left} style={{ visibility: "hidden" }} />
       <Handle type="target" position={Position.Right} style={{ visibility: "hidden" }} />
+      <ResizeHandle nodeId={id} edge="left" currentWidth={width} />
+      <ResizeHandle nodeId={id} edge="right" currentWidth={width} />
       <div
         className="truncate font-mono text-sm font-semibold"
         title={data.label}
@@ -281,11 +378,11 @@ function NodeCard({ data }: Readonly<{ data: NodeData }>) {
             // that starts on the title shouldn't do both.
             onDoubleClick={(e) => e.stopPropagation()}
           >
-            {truncateLabel(data.label)}
+            {data.label}
           </Link>
         ) : (
           // Nothing to link to: this id isn't in the catalogue.
-          truncateLabel(data.label)
+          data.label
         )}
       </div>
       {data.resolved ? (
@@ -549,9 +646,9 @@ type EdgeMeta = {
   target: string;
   kind: EdgeColorKind;
   bend: number;
-  // Absent means "not determined" — rendered as a plain gray line
-  // regardless of `kind`, distinct from "mandatory" (solid, normal color)
-  // and "optional" (dashed, normal color). See `buildLiveEdges`.
+  // Absent means "not determined" — rendered as a dotted line in the normal
+  // per-kind color, distinct from "mandatory" (solid) and "optional"
+  // (dashed). See `buildLiveEdges` and `lib/dependencyEdgeStyle.ts`.
   dependencyType?: "mandatory" | "optional";
 };
 
@@ -655,13 +752,12 @@ function buildGraphStructure(
  * them. */
 function buildLiveEdges(
   edgeMeta: EdgeMeta[],
-  nodePositions: Map<string, { x: number; y: number }>,
-  nodeWidth: number,
+  nodeGeometry: Map<string, NodeGeometry>,
 ): Edge[] {
   const centerOf = (id: string) => {
-    const pos = nodePositions.get(id);
-    if (!pos) return null;
-    return { x: pos.x + nodeWidth / 2, y: pos.y + CARD_H / 2 };
+    const box = nodeGeometry.get(id);
+    if (!box) return null;
+    return { x: box.x + box.width / 2, y: box.y + CARD_H / 2 };
   };
 
   const result: Edge[] = [];
@@ -670,10 +766,13 @@ function buildLiveEdges(
     const targetCenter = centerOf(meta.target);
     if (!sourceCenter || !targetCenter) return;
 
+    // Each end is clipped against ITS OWN box: the two cards may now have
+    // different widths, so one shared `nodeWidth` would land an arrow short of
+    // one border and past the other.
     const sourceBorder = borderPoint(
       sourceCenter.x,
       sourceCenter.y,
-      nodeWidth,
+      nodeGeometry.get(meta.source)!.width,
       CARD_H,
       targetCenter.x,
       targetCenter.y,
@@ -681,30 +780,21 @@ function buildLiveEdges(
     const targetBorder = borderPoint(
       targetCenter.x,
       targetCenter.y,
-      nodeWidth,
+      nodeGeometry.get(meta.target)!.width,
       CARD_H,
       sourceCenter.x,
       sourceCenter.y,
     );
 
-    // A "shared-resource" relation is optional by nature — the backend never
-    // sends a dependencyType for it, so an absent value there means
-    // "optional", not "no data" (unlike depends-on/supports, where absent
-    // really does mean undetermined and falls back to gray).
-    const effectiveDependencyType =
-      meta.dependencyType ?? (meta.kind === "shared-resource" ? "optional" : undefined);
-    // "mandatory" (or any other defined value) keeps the normal per-kind
-    // color, solid; "optional" keeps it but dashed; no data at all overrides
-    // the color to a neutral gray, regardless of `kind` — a deliberately
-    // orthogonal axis from the color-by-relation-kind one above.
-    const strokeColor =
-      effectiveDependencyType === undefined
-        ? "var(--color-muted)"
-        : `var(--color-graph-${meta.kind})`;
+    // The two axes are orthogonal: color always says which KIND of relation
+    // this is, the stroke pattern alone says how strong it is — solid for
+    // mandatory, dashed for optional, dotted when undetermined. See
+    // `lib/dependencyEdgeStyle.ts`.
+    const strokeColor = `var(--color-graph-${meta.kind})`;
     const style = {
       stroke: strokeColor,
       strokeWidth: 2,
-      strokeDasharray: effectiveDependencyType === "optional" ? "6 4" : undefined,
+      ...dependencyStrokeStyle(resolveDependencyType(meta.dependencyType, meta.kind)),
     };
     const markerEnd = {
       type: MarkerType.ArrowClosed,
@@ -750,20 +840,24 @@ function placeNewNode(
   count: number,
   kind: DependencyRelationKind,
   existing: Node[],
-  nodeWidth: number,
+  spawnerWidth: number,
+  defaultWidth: number,
 ): { x: number; y: number } {
   const direction = kind === "supports" ? -1 : 1;
-  const gapX = nodeWidth + 100;
+  // Cleared from the SPAWNER's edge, which is as wide as the user made it.
+  const gapX = spawnerWidth + 100;
   const gapY = 90;
   let x = spawnerPos.x + direction * gapX;
   let y = spawnerPos.y + (index - (count - 1) / 2) * gapY;
 
+  // The new card is born at the default width; the cards it must clear each
+  // have their own.
   let guard = 0;
   while (
     existing.some((n) =>
       rectsOverlap(
-        { x, y, w: nodeWidth, h: CARD_H },
-        { x: n.position.x, y: n.position.y, w: nodeWidth, h: CARD_H },
+        { x, y, w: defaultWidth, h: CARD_H },
+        { x: n.position.x, y: n.position.y, w: widthOf(n, defaultWidth), h: CARD_H },
       ),
     ) &&
     guard < 30
@@ -917,6 +1011,10 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
               label: resolved?.name ?? n.id,
               isRoot: saveRootIds.has(n.id),
               resolved,
+              // Absent in a save made before per-card widths, and in one where
+              // the card was never resized — both mean "follow the global
+              // setting", which is what leaving it undefined does.
+              width: n.width,
             } satisfies NodeData,
             selectable: false,
             style: { cursor: "pointer" },
@@ -1037,6 +1135,51 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
     setNodes((current) => applyNodeChanges(changes, current));
   }, []);
 
+  /**
+   * Applies a resize gesture from a card's left/right `ResizeHandle`: clamps
+   * `proposedWidth` to `MIN_CARD_WIDTH`, then — for the LEFT edge only —
+   * shifts the card's own position by the growth, so the right border stays
+   * put and the card stretches instead of sliding under the pointer.
+   *
+   * Position and width are written in the SAME `setNodes` on purpose: split
+   * across two updates, the card drifts by a frame's worth of growth.
+   *
+   * This fires on every pointermove, so it returns `current` untouched when
+   * nothing changed and rebuilds ONLY the resized node. Handing back a fresh
+   * array (or fresh objects for untouched cards) would make every card look
+   * new to React Flow and force a re-measure of all of them — the same
+   * flicker `applyNodeChanges` exists to avoid, see the `nodes` state above.
+   */
+  /** `handleResizeNode` must not change identity on every settings tick — it
+   * is handed to every card through `ResizeContext` — so the current default
+   * width reaches it through a ref rather than a dependency. */
+  const defaultNodeWidthRef = useRef(displaySettings.nodeWidth);
+  defaultNodeWidthRef.current = displaySettings.nodeWidth;
+
+  const handleResizeNode = useCallback(
+    (nodeId: string, edge: "left" | "right", proposedWidth: number) => {
+      setNodes((current) => {
+        const node = current.find((n) => n.id === nodeId);
+        if (!node) return current;
+        const oldWidth = widthOf(node, defaultNodeWidthRef.current);
+        const newWidth = Math.max(proposedWidth, MIN_CARD_WIDTH);
+        if (newWidth === oldWidth) return current;
+        const growth = edge === "left" ? newWidth - oldWidth : 0;
+        return current.map((n) =>
+          n.id === nodeId
+            ? {
+                ...n,
+                position:
+                  growth !== 0 ? { ...n.position, x: n.position.x - growth } : n.position,
+                data: { ...(n.data as NodeData), width: newWidth },
+              }
+            : n,
+        );
+      });
+    },
+    [],
+  );
+
   const handleExpand = useCallback(
     (nodeId: string, kind: DependencyRelationKind) => {
       const spawner = resolveBench(nodeId);
@@ -1067,6 +1210,7 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
             toAdd.length,
             kind,
             [...current],
+            widthOf(spawnerNode, displaySettings.nodeWidth),
             displaySettings.nodeWidth,
           ),
           data: {
@@ -1189,6 +1333,7 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
             toAdd.length,
             "depends-on",
             [...current],
+            widthOf(spawnerNode, displaySettings.nodeWidth),
             displaySettings.nodeWidth,
           ),
           data: {
@@ -1372,13 +1517,122 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
   // Exposes the currently displayed graph so the parent (which owns the
   // Save/Save-as UI) can snapshot it on demand — pulled only when the user
   // actually clicks Save, rather than pushed up on every drag frame.
+  const clearHover = useCallback(() => {
+    containerRef.current
+      ?.querySelectorAll(".rf-dim, .rf-emph")
+      .forEach((el) => el.classList.remove("rf-dim", "rf-emph"));
+  }, []);
+
+  /**
+   * Bounds of everything drawn, in graph coordinates.
+   *
+   * Computed from the node positions and the card geometry rather than from
+   * xyflow's `getNodesBounds`, which reads measured DOM dimensions and would
+   * disagree with the sizes the layout was told to reserve.
+   *
+   * Then inflated by the largest bow any edge is currently carrying: a curve
+   * leaves the straight line between its two cards by up to that much, so
+   * framing on the cards alone would clip it. A hand-dialled curvature has no
+   * ceiling, which is why the inflation is measured rather than assumed.
+   */
+  const captureBounds = useCallback((): CaptureBounds | null => {
+    if (nodes.length === 0) return null;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const n of nodes) {
+      minX = Math.min(minX, n.position.x);
+      minY = Math.min(minY, n.position.y);
+      maxX = Math.max(maxX, n.position.x + widthOf(n, displaySettings.nodeWidth));
+      maxY = Math.max(maxY, n.position.y + CARD_H);
+    }
+    // A curve leaves the straight line between its two cards by half its
+    // control offset (the quadratic peaks at `offset / 2`), so framing on the
+    // cards alone clips it. An un-bent edge offsets by at most `MAX_CURVE`
+    // scaled by the global setting — which reaches 2x — and a hand-dialled
+    // one has no ceiling at all, so it is measured rather than assumed.
+    // Hidden edges are skipped: an invisible bow must not inflate the frame.
+    const overrides = getAllEdgeCurvatures();
+    const defaultOffset =
+      MAX_CURVE * (displaySettings.edgeCurvature / EDGE_CURVATURE_NEUTRAL);
+    const bow =
+      edgeMeta.reduce((widest, e) => {
+        if (hidden[e.kind]) return widest;
+        const override = overrides[e.id];
+        return Math.max(
+          widest,
+          override === undefined ? defaultOffset : Math.abs(override),
+        );
+      }, 0) / 2;
+    return {
+      x: minX - bow,
+      y: minY - bow,
+      width: maxX - minX + bow * 2,
+      height: maxY - minY + bow * 2,
+    };
+  }, [nodes, edgeMeta, hidden, displaySettings.nodeWidth, displaySettings.edgeCurvature]);
+
+  const exportImage = useCallback(
+    async (format: "png" | "svg"): Promise<Blob> => {
+      const viewport = containerRef.current?.querySelector<HTMLElement>(
+        ".react-flow__viewport",
+      );
+      if (!viewport) throw new Error("The diagram is not ready yet.");
+      const bounds = captureBounds();
+      if (!bounds) throw new Error("There is nothing on the diagram to export.");
+
+      // A hover trace left behind would be baked into the image: `.rf-dim`
+      // drops nodes to 0.25 opacity. Clearing the classes is not enough on
+      // its own — `globals.css` animates opacity over 150ms, and the capture
+      // copies *computed* styles, so firing immediately would freeze the
+      // cards mid-fade. Let the transition finish first.
+      clearHover();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      return captureViewport(viewport, bounds, format);
+    },
+    [captureBounds, clearHover],
+  );
+
+  const getGraphModel = useCallback(
+    (): DiagramSnapshot => ({
+      benches: nodes.map((n) => {
+        const data = n.data as unknown as NodeData;
+        return { id: n.id, name: data.resolved?.name ?? data.label, isRoot: data.isRoot };
+      }),
+      // A hidden edge is absent from the canvas entirely (React Flow renders
+      // nothing for it), so the image excludes it for free — but `edgeMeta`
+      // still holds it, and this text has to do the filtering by hand.
+      edges: edgeMeta
+        .filter((e) => !hidden[e.kind])
+        .map((e) => ({
+          source: e.source,
+          target: e.target,
+          kind: e.kind,
+          dependencyType: e.dependencyType,
+        })),
+    }),
+    [nodes, edgeMeta, hidden],
+  );
+
   useImperativeHandle(
     ref,
     () => ({
       getSnapshot: () => {
         if (nodes.length === 0) return null;
         return {
-          nodes: nodes.map((n) => ({ id: n.id, x: n.position.x, y: n.position.y })),
+          nodes: nodes.map((n) => ({
+            id: n.id,
+            x: n.position.x,
+            y: n.position.y,
+            // Only when the user actually resized the card, so a diagram that
+            // was never resized still serialises exactly as it did before
+            // per-card widths existed.
+            ...((n.data as NodeData).width !== undefined
+              ? { width: (n.data as NodeData).width }
+              : {}),
+          })),
           edges: edgeMeta.map((e) => ({
             source: e.source,
             target: e.target,
@@ -1390,19 +1644,30 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
       },
       addBench,
       removeBench,
+      exportImage,
+      getGraphModel,
     }),
-    [nodes, edgeMeta, addBench, removeBench],
+    [nodes, edgeMeta, addBench, removeBench, exportImage, getGraphModel],
   );
 
-  const nodePositions = useMemo(() => {
-    const map = new Map<string, { x: number; y: number }>();
-    nodes.forEach((n) => map.set(n.id, n.position));
+  // Position AND width: both move an edge's endpoints, so both have to reach
+  // `buildLiveEdges`. Rebuilt whenever `nodes` changes identity, which a
+  // resize guarantees for the card it touches.
+  const nodeGeometry = useMemo(() => {
+    const map = new Map<string, NodeGeometry>();
+    nodes.forEach((n) =>
+      map.set(n.id, {
+        x: n.position.x,
+        y: n.position.y,
+        width: widthOf(n, displaySettings.nodeWidth),
+      }),
+    );
     return map;
-  }, [nodes]);
+  }, [nodes, displaySettings.nodeWidth]);
 
   const rawEdges = useMemo(
-    () => buildLiveEdges(edgeMeta, nodePositions, displaySettings.nodeWidth),
-    [edgeMeta, nodePositions, displaySettings.nodeWidth],
+    () => buildLiveEdges(edgeMeta, nodeGeometry),
+    [edgeMeta, nodeGeometry],
   );
 
   const edges = useMemo(
@@ -1413,12 +1678,6 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
       }),
     [rawEdges, hidden],
   );
-
-  const clearHover = useCallback(() => {
-    containerRef.current
-      ?.querySelectorAll(".rf-dim, .rf-emph")
-      .forEach((el) => el.classList.remove("rf-dim", "rf-emph"));
-  }, []);
 
   const handleNodeMouseEnter = useCallback(
     (_: unknown, node: Node) => {
@@ -1467,56 +1726,58 @@ const DependencyGraph = forwardRef<DependencyGraphHandle, Props>(function Depend
 
   return (
     <div ref={containerRef} className="relative h-full w-full">
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        nodesDraggable
-        nodesConnectable={false}
-        elementsSelectable={false}
-        deleteKeyCode={null}
-        fitView
-        fitViewOptions={{ maxZoom: 1 }}
-        onNodesChange={onNodesChange}
-        onNodeMouseEnter={handleNodeMouseEnter}
-        onNodeMouseLeave={clearHover}
-        onNodeDoubleClick={(_, n) => {
-          if (previewNodeId === n.id) {
-            setPreview(null);
-            setPreviewNodeId(null);
-            return;
-          }
-          const data = n.data as unknown as NodeData;
-          setPreview({ label: data.label, isRoot: data.isRoot, resolved: data.resolved });
-          setPreviewNodeId(n.id);
-        }}
-        onNodeContextMenu={(event, n) => {
-          event.preventDefault();
-          const wrapRect = containerRef.current?.getBoundingClientRect();
-          const resolved = resolveBench(n.id);
-          const existingIds = new Set(nodes.map((nn) => nn.id));
-          const notShown = (list: DependencyRelation[]) =>
-            list.filter((rel) => rel.externalId !== n.id && !existingIds.has(rel.externalId)).length;
-          setContextMenu({
-            nodeId: n.id,
-            x: event.clientX - (wrapRect?.left ?? 0),
-            y: event.clientY - (wrapRect?.top ?? 0),
-            // A node that doesn't resolve to a catalogue bench can't have its
-            // type checked, so it falls back to the "bench" variant — every
-            // action ends up disabled anyway since `resolved` is null.
-            variant: resolved?.type === "SHARE" ? "shared-resource" : "bench",
-            dependsOnCount: resolved ? notShown(resolved.dependsOn) : 0,
-            supportsCount: resolved ? notShown(resolved.supports) : 0,
-            sharedResourcesCount: resolved ? notShown(resolved.sharedResources) : 0,
-            usableByCount: usersOf(n.id).filter(({ bench: u }) => !existingIds.has(u.externalId))
-              .length,
-          });
-        }}
-      >
-        <Background />
-        <Controls showInteractive={false} />
-      </ReactFlow>
+      <ResizeContext.Provider value={handleResizeNode}>
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
+          nodesDraggable
+          nodesConnectable={false}
+          elementsSelectable={false}
+          deleteKeyCode={null}
+          fitView
+          fitViewOptions={{ maxZoom: 1 }}
+          onNodesChange={onNodesChange}
+          onNodeMouseEnter={handleNodeMouseEnter}
+          onNodeMouseLeave={clearHover}
+          onNodeDoubleClick={(_, n) => {
+            if (previewNodeId === n.id) {
+              setPreview(null);
+              setPreviewNodeId(null);
+              return;
+            }
+            const data = n.data as unknown as NodeData;
+            setPreview({ label: data.label, isRoot: data.isRoot, resolved: data.resolved });
+            setPreviewNodeId(n.id);
+          }}
+          onNodeContextMenu={(event, n) => {
+            event.preventDefault();
+            const wrapRect = containerRef.current?.getBoundingClientRect();
+            const resolved = resolveBench(n.id);
+            const existingIds = new Set(nodes.map((nn) => nn.id));
+            const notShown = (list: DependencyRelation[]) =>
+              list.filter((rel) => rel.externalId !== n.id && !existingIds.has(rel.externalId)).length;
+            setContextMenu({
+              nodeId: n.id,
+              x: event.clientX - (wrapRect?.left ?? 0),
+              y: event.clientY - (wrapRect?.top ?? 0),
+              // A node that doesn't resolve to a catalogue bench can't have its
+              // type checked, so it falls back to the "bench" variant — every
+              // action ends up disabled anyway since `resolved` is null.
+              variant: resolved?.type === "SHARE" ? "shared-resource" : "bench",
+              dependsOnCount: resolved ? notShown(resolved.dependsOn) : 0,
+              supportsCount: resolved ? notShown(resolved.supports) : 0,
+              sharedResourcesCount: resolved ? notShown(resolved.sharedResources) : 0,
+              usableByCount: usersOf(n.id).filter(({ bench: u }) => !existingIds.has(u.externalId))
+                .length,
+            });
+          }}
+        >
+          <Background />
+          <Controls showInteractive={false} />
+        </ReactFlow>
+      </ResizeContext.Provider>
       <DependencyLegend
         counts={counts}
         hidden={hidden}

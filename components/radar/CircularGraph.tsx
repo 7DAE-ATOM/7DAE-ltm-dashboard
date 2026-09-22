@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LabTestMean } from "@/lib/types";
 import { buildRadarGraph, type RadarNode, type RadarEdge } from "./buildRadarGraph";
+import {
+  dependencyStrokeStyle,
+  resolveDependencyType,
+} from "@/lib/dependencyEdgeStyle";
 import BenchPreviewModal, {
   type PreviewTarget,
 } from "@/components/interaction/BenchPreviewModal";
@@ -58,12 +62,6 @@ function edgeHoverColors(kind: RadarEdge["kind"]): { out: string; in: string } {
   return { out: "var(--color-graph-depends-on)", in: "var(--color-graph-supports)" };
 }
 
-// A "shared-resource" relation is optional by nature — same rule as
-// `/depgraph` (DependencyGraph.tsx) — so an absent dependencyType there
-// still means "optional", not "no data".
-function isOptional(edge: RadarEdge): boolean {
-  return (edge.dependencyType ?? (edge.kind === "shared-resource" ? "optional" : undefined)) === "optional";
-}
 
 export default function CircularGraph({ benches, radius }: Readonly<Props>) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -197,7 +195,9 @@ export default function CircularGraph({ benches, radius }: Readonly<Props>) {
                     "--edge-color-in": colors.in,
                   } as React.CSSProperties
                 }
-                strokeDasharray={isOptional(edge) ? "6 4" : undefined}
+                {...dependencyStrokeStyle(
+                  resolveDependencyType(edge.dependencyType, edge.kind),
+                )}
                 data-id={edge.id}
                 data-source={edge.source}
                 data-target={edge.target}
