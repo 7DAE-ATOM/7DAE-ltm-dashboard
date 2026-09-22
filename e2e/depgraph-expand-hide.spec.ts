@@ -52,3 +52,49 @@ test("right-click expand adds a connected node, then Hide removes it", async ({ 
   await expect(page.locator(".react-flow__node")).toHaveCount(1);
   await expect(page.locator(".react-flow__edge")).toHaveCount(0);
 });
+
+test("hiding the only selected bench keeps its neighbours on the canvas", async ({
+  page,
+}) => {
+  const rootNode = await selectFirstBenchAsRoot(page);
+  const rootName = (await rootNode.innerText()).split("\n")[0].trim();
+  test.skip(rootName.endsWith("..."), "Root label is truncated");
+
+  await rootNode.click({ button: "right" });
+  const menu = page.getByRole("menu");
+  await expect(menu).toBeVisible();
+  let expanded = false;
+  for (const name of [
+    "Show depends on",
+    "Show supports",
+    "Show shared resources",
+    "Usable by",
+  ]) {
+    const item = menu.getByRole("menuitem", { name });
+    if ((await item.count()) > 0 && (await item.isEnabled())) {
+      await item.click();
+      expanded = true;
+      break;
+    }
+  }
+  test.skip(!expanded, "Root bench has no expandable relations right now");
+
+  const total = await page.locator(".react-flow__node").count();
+  expect(total).toBeGreaterThan(1);
+
+  // Hide the ONLY selected bench. This used to be refused outright.
+  await page.locator(".react-flow__node").first().click({ button: "right" });
+  const hideItem = menu.getByRole("menuitem", { name: "Hide" });
+  await expect(hideItem).toBeEnabled();
+  await hideItem.click();
+
+  // Its card and chip are gone; every neighbour it brought in stays, even
+  // though nothing is selected any more — hiding does not cascade.
+  await expect(page.locator(".react-flow__node")).toHaveCount(total - 1);
+  await expect(
+    page.getByRole("button", { name: `Remove ${rootName}` }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText("Select a bench to start building a diagram."),
+  ).toHaveCount(0);
+});

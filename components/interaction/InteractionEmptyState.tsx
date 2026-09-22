@@ -3,7 +3,7 @@ type Props = {
 };
 
 const MESSAGES: Record<Props["reason"], string> = {
-  "no-selection": "Select a bench to view its dependencies.",
+  "no-selection": "Select a bench to start building a diagram.",
   "layout-loading": "Computing the graph layout…",
   "layout-error": "Could not compute the graph layout.",
 };

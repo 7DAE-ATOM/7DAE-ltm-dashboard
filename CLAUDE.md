@@ -28,9 +28,11 @@ When a refactor deletes routes or pages, `.next/` often holds stale chunks and d
 ## Architecture
 
 ### Routes
-- `/` → catalogue grid (`CatalogueClient`), paginated 6/page, URL-synced via `?page=`.
+- `/` → catalogue grid (`CatalogueClient`), URL-synced via `?page=`. Page size is the user's grid density (cards-per-row × rows-per-page, `lib/catalogueDensity.ts`), not a constant.
 - `/map` → MapLibre full-screen view (`MapClient` + `MapView`), with a nested `app/map/layout.tsx` that scopes the `theme-map-first` class.
 - `/labtestmean?id=<externalId>` → detail page with photo gallery, security/access, lifecycle timeline, people, programs/projects. This is a **single static page** (`app/labtestmean/page.tsx`) that reads the `id` query param via `useSearchParams()` and fetches client-side. It is intentionally **not** a dynamic `[externalId]` route: under `output: "export"` a dynamic segment would require pre-generating every id (or breaks on unknown ids), so the query-param form keeps it fully dynamic with zero pre-generation.
+- `/depgraph` → React Flow dependency diagram (`InteractionClient`), roots read from `?ids=<externalId,…>`. A `?seed=<token>` from the catalogue's ACTIONS block is converted to that canonical `?ids=` form on arrival (`lib/depgraphSeed.ts`) — on this page `?ids=` IS the live selection, so nothing downstream needs to know about seeds.
+- `/depview` → radial SVG dependency view (`RadarClient`).
 - `/health` → static JSON `{ "status": "ok" }`, used by the Helm chart's liveness/readiness probes.
 
 There is **no** mock JSON, **no** `/bench/` segment, **no** `/d/<direction>` segment, and **no** panorama viewer. All three belonged to earlier iterations and have been deleted — do not reintroduce.
@@ -40,7 +42,7 @@ There is **no** mock JSON, **no** `/bench/` segment, **no** `/d/<direction>` seg
 - `lib/atom-api.ts` — `fetch` against `${ATOM_API_BASE_URL}/api/infos/labtestmeans` (defaults to `http://localhost:8080/atom-synchronizer-dev`). Throws `AtomApiError` with `status: 0` on network failure; `app/error.tsx` matches the message to render a backend-down screen.
 - `lib/labtestmean-adapter.ts` — maps the backend `LabTestMeanDto` → frontend `LabTestMean`. Derives `status` from lifecycle dates (`dismantled` → `out-of-service`, `mothballed` → `mothballed`, missing `eisdateyear` → `in-project`, else `operational`). Uppercases the `category` enum (formerly `testMeanType` upstream). Hardcodes country/city/geo lookup for the four known sites: **TLS, HMB, FIL, BRE** — anything else falls through to `Unknown` and is silently filtered out of `/map`.
 - All cards/galleries currently use placeholder cover SVGs in `public/covers/` because the DTO has no photo fields. The detail-page gallery shows the same covers.
-- Filtering happens client-side over the array passed from the server component.
+- Filtering happens client-side over the array passed from the server component — see "Filtering is shared across three pages" below.
 
 ### Two orthogonal theming axes
 This is the single most important architectural idea and is easy to misread:
@@ -50,6 +52,22 @@ This is the single most important architectural idea and is easy to misread:
 2. **Route theme class** — `theme-industrial-premium` applied on `<body>` in `app/layout.tsx`; `theme-map-first` applied inside `app/map/layout.tsx`. These classes only carry **structural** overrides (the glass panel, the card hover glow). They do **not** redefine color tokens — colors come exclusively from the `[data-theme]` axis. Translucent values use `color-mix(in srgb, var(--color-accent) X%, transparent)` so they adapt automatically.
 
 When you change colors, the default is to edit `:root[data-theme="dark"]` / `:root[data-theme="light"]` in `app/globals.css`. Touch `styles/themes/*.css` only for structural overrides that cannot be expressed as tokens.
+
+### Persisted preferences — one factory, one exception
+
+Every user preference kept in browser storage goes through **`lib/createPersistedStore.ts`**. The factory owns the plumbing that used to be copy-pasted per store: lazy hydration, a constant server snapshot, snapshot identity (`useSyncExternalStore` loops forever if `getSnapshot` mints a new object per read), forgiving persistence, and the cross-tab `storage` listener. Each store supplies only its key, storage level, default and a **`parse`** function — the per-preference validation stays explicit and must never collapse into a blind `JSON.parse`.
+
+The rule for the exception: a preference lives in the **DOM** (attribute on `<html>` + `MutationObserver`) **if and only if** it must be correct *before* hydration or be readable by CSS. Only two qualify — `lib/useTheme.ts` (`data-theme`) and `lib/catalogueDensity.ts` (`data-cat-cols` / `--cat-cols`), both written by inline anti-FOUC scripts in `app/layout.tsx`. Anything else goes through the factory.
+
+Storage level: `localStorage` for display preferences (they outlive the tab and sync across tabs — chapter folding, density, the diagram and radar settings), `sessionStorage` for the shared filter selection (`lib/appFilters.ts`) — a narrow filter forgotten since yesterday would look like an empty catalogue, and two tabs scoped differently is a legitimate use.
+
+`lib/radarDisplaySettings.ts`, `lib/photoCacheSettings.ts` and `lib/interactionDisplaySettings.ts` still hand-roll the pattern; migrating them is mechanical and deliberately deferred. `lib/interactionEdgeCurvature.ts` is neither: per-edge listeners, deliberately never persisted except inside a named diagram save.
+
+### Filtering is shared across three pages
+
+`lib/appFilters.ts` is the single source of truth for `FilterValue`, consumed by `/`, `/map` and `/depview` alike. `lib/useFilteredLabTestMeans.ts` derives `{selectable, visible}` from it: `selectable` is what the coarse axes kept, `visible` is that minus `excludedIds` (the "Displayed LTM" chapter). The chapter must be fed `selectable`, not `visible`, or an excluded bench could never be put back.
+
+`components/FilterPanel.tsx` renders the panel; the three pages differ only by the positioning `className` they pass, and must reveal it with `lg:flex`, not `lg:block`. `components/FilterSheet.tsx` is the mobile twin and spreads the exact same props — the two are mounted simultaneously, so neither may hold filter state of its own.
 
 ### Client/server boundary
 - Page-level files in `app/` stay server components; state, effects, and browser APIs move into a dedicated `Client` component (`CatalogueClient`, `MapClient`, `Header`, `ThemeToggle`).

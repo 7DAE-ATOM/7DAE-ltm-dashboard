@@ -1,6 +1,17 @@
 import type { EdgeColorKind } from "@/components/interaction/DependencyGraph";
+import { downloadBlob } from "@/lib/downloadBlob";
 
-export type InteractionSaveNode = { id: string; x: number; y: number };
+export type InteractionSaveNode = {
+  id: string;
+  x: number;
+  y: number;
+  /** Absent unless the user resized this card by dragging one of its vertical
+   * edges — absent reads back as "follow the global `nodeWidth` display
+   * setting", which is what a save made before per-card widths existed should
+   * do. Optional for the same reason as `dependencyType` and `curvature`
+   * below: no version bump, no migration. */
+  width?: number;
+};
 export type InteractionSaveEdge = {
   source: string;
   target: string;
@@ -15,6 +26,12 @@ export type InteractionSave = {
   rootExternalIds: string[];
   nodes: InteractionSaveNode[];
   edges: InteractionSaveEdge[];
+  /** Hand-dialled edge bows, keyed by edge id — see
+   * `lib/interactionEdgeCurvature.ts`, where they are otherwise session-only.
+   * Optional for the same reason as `dependencyType` above: absent reads back
+   * as "every edge on the global curvature setting", which is exactly what a
+   * save made before this field existed should do. No version bump. */
+  curvature?: Record<string, number>;
   savedAt: string;
 };
 
@@ -125,8 +142,12 @@ export function deleteSave(name: string): void {
   writeIndex(readIndex().filter((n) => n !== name));
 }
 
-function sanitizeFilename(name: string): string {
-  return name.replaceAll(/[\\/:*?"<>|]/g, "_").trim() || "diagram";
+/** Strips the characters Windows and POSIX refuse in a filename. Falls back
+ * to a neutral name rather than producing an empty one, which would leave the
+ * file called just its extension. Exported because an image export names
+ * itself after the active save too. */
+export function sanitizeFilename(name: string): string {
+  return name.replaceAll(/[\/:*?"<>|]/g, "_").trim() || "diagram";
 }
 
 /** Downloads `data` as a `.json` file named after `name` — lets a user share
@@ -134,14 +155,7 @@ function sanitizeFilename(name: string): string {
  * otherwise never leave this browser's `localStorage`. */
 export function downloadInteractionSave(name: string, data: InteractionSave): void {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${sanitizeFilename(name)}.json`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, `${sanitizeFilename(name)}.json`);
 }
 
 type UnknownRecord = Record<string, unknown>;
@@ -155,7 +169,11 @@ function isNodeArray(value: unknown): value is InteractionSaveNode[] {
       return (
         typeof rec.id === "string" &&
         typeof rec.x === "number" &&
-        typeof rec.y === "number"
+        typeof rec.y === "number" &&
+        // Absent is the norm; present but nonsensical (hand-edited file) is
+        // rejected outright rather than silently drawn as a zero-width card.
+        (rec.width === undefined ||
+          (typeof rec.width === "number" && Number.isFinite(rec.width) && rec.width > 0))
       );
     })
   );
@@ -179,6 +197,18 @@ function isEdgeArray(value: unknown): value is InteractionSaveEdge[] {
       return true;
     })
   );
+}
+
+/** Absent or malformed curvature is dropped rather than rejected: it is a
+ * reading comfort, not the diagram, and losing the bows beats refusing the
+ * file. */
+function toCurvature(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, number> = {};
+  for (const [id, offset] of Object.entries(value as UnknownRecord)) {
+    if (typeof offset === "number" && Number.isFinite(offset)) out[id] = offset;
+  }
+  return out;
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -224,6 +254,7 @@ export function parseImportedSave(raw: string): InteractionSave {
       rootExternalIds: [rec.rootExternalId],
       nodes: rec.nodes,
       edges: rec.edges,
+      curvature: toCurvature(rec.curvature),
       savedAt: rec.savedAt,
     };
   }
@@ -236,6 +267,7 @@ export function parseImportedSave(raw: string): InteractionSave {
       rootExternalIds: rec.rootExternalIds,
       nodes: rec.nodes,
       edges: rec.edges,
+      curvature: toCurvature(rec.curvature),
       savedAt: rec.savedAt,
     };
   }

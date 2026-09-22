@@ -6,6 +6,8 @@ import {
   setInteractionDisplaySetting,
   NODE_WIDTH_MIN,
   NODE_WIDTH_MAX,
+  EDGE_CURVATURE_MIN,
+  EDGE_CURVATURE_MAX,
   type InteractionDisplaySettings,
 } from "@/lib/interactionDisplaySettings";
 import Switch from "@/components/Switch";
@@ -91,6 +93,31 @@ export default function DisplaySettingsControl() {
               onChange={(e) => setInteractionDisplaySetting("nodeWidth", Number(e.target.value))}
               className="w-full px-1"
             />
+          </div>
+
+          <div className="mt-1.5 border-t border-border pt-1.5">
+            <div className="flex items-center justify-between gap-3 px-1 py-1.5 text-sm text-fg">
+              <label htmlFor="edge-curvature-slider">Link curvature</label>
+              <span className="font-mono text-xs text-muted">
+                {settings.edgeCurvature}%
+              </span>
+            </div>
+            <input
+              id="edge-curvature-slider"
+              type="range"
+              min={EDGE_CURVATURE_MIN}
+              max={EDGE_CURVATURE_MAX}
+              step={5}
+              value={settings.edgeCurvature}
+              onChange={(e) =>
+                setInteractionDisplaySetting("edgeCurvature", Number(e.target.value))
+              }
+              className="w-full px-1"
+            />
+            {/* Links bent by hand keep their own bow and ignore this. */}
+            <p className="px-1 pt-1 text-[11px] text-muted">
+              Drag the dot on a link to bend it individually.
+            </p>
           </div>
         </div>
       )}

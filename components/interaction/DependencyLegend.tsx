@@ -1,4 +1,8 @@
 import type { EdgeColorKind } from "./DependencyGraph";
+import {
+  DEPENDENCY_LEVEL_ITEMS,
+  dependencyStrokeStyle,
+} from "@/lib/dependencyEdgeStyle";
 
 // "depends-on" and "supports" are merged: an "A depends-on B" relation always
 // exists mirrored as "B supports A" on the other bench (same underlying
@@ -11,12 +15,13 @@ const LEGEND_ITEMS: { kind: EdgeColorKind; label: string }[] = [
 
 // Purely explanatory — line style is orthogonal to the relation-kind colors
 // above (it comes from `dependencyType`, cf. `DependencyGraph.tsx`), so these
-// rows have no toggle/count, just a sample of each style.
-const LINE_STYLE_ITEMS: { label: string; dasharray?: string; color: string }[] = [
-  { label: "Mandatory", color: "var(--color-fg)" },
-  { label: "Optional", dasharray: "4 3", color: "var(--color-fg)" },
-  { label: "No data", color: "var(--color-muted)" },
-];
+// rows have no toggle/count, just a sample of each style. All three samples
+// are drawn in the neutral text color on purpose: color is the OTHER axis,
+// already illustrated by the "Relation type" block above.
+const LINE_STYLE_ITEMS = DEPENDENCY_LEVEL_ITEMS.map((item) => ({
+  ...item,
+  stroke: dependencyStrokeStyle(item.type),
+}));
 
 type Props = {
   counts: Record<EdgeColorKind, number>;
@@ -51,7 +56,7 @@ export default function DependencyLegend({ counts, hidden, onToggle }: Readonly<
       ))}
       <div className="my-1 border-t border-border" />
       <span className="px-2 pb-1 text-[0.65rem] uppercase tracking-wider text-muted">
-        Dependency
+        Dependency level
       </span>
       {LINE_STYLE_ITEMS.map((item) => (
         <div key={item.label} className="flex items-center gap-2 px-2 py-1 text-xs text-fg/90">
@@ -61,9 +66,10 @@ export default function DependencyLegend({ counts, hidden, onToggle }: Readonly<
               y1="5"
               x2="18"
               y2="5"
-              stroke={item.color}
+              stroke="var(--color-fg)"
               strokeWidth="2"
-              strokeDasharray={item.dasharray}
+              strokeDasharray={item.stroke.strokeDasharray}
+              strokeLinecap={item.stroke.strokeLinecap}
             />
           </svg>
           <span>{item.label}</span>

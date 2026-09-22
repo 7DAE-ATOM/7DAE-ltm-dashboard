@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useLabTestMeans } from "@/lib/useLabTestMeans";
@@ -19,6 +19,14 @@ import {
   writeSave,
   type InteractionSave,
 } from "@/lib/interactionSaves";
+import { consumeSeedIds } from "@/lib/depgraphSeed";
+import DiagramExportMenu, {
+  type ExportFormat,
+} from "@/components/interaction/DiagramExportMenu";
+import { ImageExportTooLargeError } from "@/lib/diagramImageExport";
+import { toMermaid } from "@/lib/diagramMermaid";
+import { downloadBlob, exportDateStamp } from "@/lib/downloadBlob";
+import { sanitizeFilename } from "@/lib/interactionSaves";
 
 const DependencyGraph = dynamic(
   () => import("@/components/interaction/DependencyGraph"),
@@ -50,7 +58,47 @@ export default function InteractionClient() {
   const [pendingLoad, setPendingLoad] = useState<InteractionSave | null>(null);
   const [saveVersion, setSaveVersion] = useState(0);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [seedExpired, setSeedExpired] = useState(false);
+  /* Cards currently on the canvas, pushed up by the diagram. The selection
+   * alone is no longer enough to decide whether to render it: hiding the last
+   * selected bench empties the selection while leaving its neighbours behind,
+   * and those must not vanish with it. `setGraphNodeCount` is passed to the
+   * graph directly — a `useState` setter has a stable identity, which is what
+   * the callbacks below are hand-wrapped in `useCallback` to achieve. */
+  const [graphNodeCount, setGraphNodeCount] = useState(0);
+  /** Doubles as the busy flag and as which format is in flight. */
+  const [exporting, setExporting] = useState<ExportFormat | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const graphRef = useRef<DependencyGraphHandle>(null);
+
+  /* A `?seed=<token>` arrives from the catalogue when the selection was too
+   * large to put in the URL. It is converted straight into the canonical
+   * `?ids=` form rather than kept as state: on this page `?ids=` IS the live
+   * selection, so after this one `replace` every existing code path applies
+   * unchanged.
+   *
+   * The ref guards against StrictMode's double mount; `consumeSeedIds` also
+   * memoizes, so a second read still resolves. */
+  const seedParam = searchParams.get("seed");
+  const seedConsumedRef = useRef(false);
+  useEffect(() => {
+    if (!seedParam || seedConsumedRef.current) return;
+    seedConsumedRef.current = true;
+    const ids = consumeSeedIds(seedParam);
+    if (!ids) {
+      // Unknown, malformed or expired: say so rather than showing an empty
+      // diagram that looks like the link simply did nothing.
+      setSeedExpired(true);
+    }
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("seed");
+    params.delete("id");
+    if (ids?.length) params.set("ids", ids.join(","));
+    const query = params.toString();
+    router.replace(query ? `/depgraph?${query}` : "/depgraph", {
+      scroll: false,
+    });
+  }, [seedParam, searchParams, router]);
 
   // Stable references — an inline arrow function here would get a new
   // identity on every render (e.g. right after `handleSaveAs` itself calls
@@ -107,19 +155,85 @@ export default function InteractionClient() {
       const next = selectedIds.filter((x) => x !== id);
       setActiveSaveName(null);
       setDirty(false);
-      // Only bother mutating the (about to unmount) diagram if the selection
-      // will still be non-empty afterward.
       if (next.length > 0) {
         graphRef.current?.removeBench(id);
+      } else {
+        // Taking the last chip away clears the board, as it always has.
+        // Without this the diagram would now stay mounted on the strength of
+        // its leftover cards — that leniency is for `Hide`, which is about
+        // one card, not for "I am done with this selection".
+        setGraphNodeCount(0);
       }
       updateSelectionUrl(next);
     },
     [selectedIds, updateSelectionUrl],
   );
 
+  /**
+   * The diagram hid a selected bench from its context menu. It has already
+   * taken the card and its edges off the canvas, so all that is left here is
+   * to drop it from the selection — the chip has to go with the card.
+   *
+   * Pointedly NOT `handleRemoveBench`: that one calls into `removeBench`,
+   * which cascades and would take the hidden bench's neighbours with it.
+   * Hiding is meant to leave them exactly where they are.
+   */
+  const handleRootHidden = useCallback(
+    (id: string) => {
+      setActiveSaveName(null);
+      setDirty(false);
+      updateSelectionUrl(selectedIds.filter((x) => x !== id));
+    },
+    [selectedIds, updateSelectionUrl],
+  );
+
+  /**
+   * PNG and SVG capture the canvas; Mermaid rebuilds it from the model. Two
+   * unrelated mechanisms, one menu — hence the switch rather than a single
+   * generator.
+   *
+   * Nothing here is the `…` menu's "Export", which downloads the save file so
+   * the diagram can come back into this app. This one produces something for
+   * the outside world.
+   */
+  const handleExport = useCallback(
+    async (format: ExportFormat) => {
+      setExportError(null);
+      setExporting(format);
+      try {
+        const base = `${sanitizeFilename(activeSaveName ?? "depgraph")}-${exportDateStamp()}`;
+        if (format === "mermaid") {
+          const model = graphRef.current?.getGraphModel();
+          if (!model) return;
+          const blob = new Blob([toMermaid(model)], {
+            type: "text/plain;charset=utf-8",
+          });
+          downloadBlob(blob, `${base}.mmd`);
+          return;
+        }
+        const blob = await graphRef.current?.exportImage(format);
+        if (!blob) return;
+        downloadBlob(blob, `${base}.${format}`);
+      } catch (e) {
+        // A refused PNG is an expected outcome on a huge graph, not a bug: it
+        // gets a message that points at the formats which do scale.
+        setExportError(
+          e instanceof ImageExportTooLargeError
+            ? e.message
+            : `Export failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      } finally {
+        setExporting(null);
+      }
+    },
+    [activeSaveName],
+  );
+
   const handleSaveAs = useCallback(
     (name: string) => {
-      if (selectedBenches.length === 0) return; // SaveLoadControls disables Save/Save-as in this case
+      // `getSnapshot` already returns null on an empty canvas, which is the
+      // real precondition — a diagram with cards but no selected bench is
+      // saveable.
       const snapshot = graphRef.current?.getSnapshot();
       if (!snapshot) return;
       const ok = writeSave(name, {
@@ -158,7 +272,10 @@ export default function InteractionClient() {
       const rootBenches = save.rootExternalIds
         .map((id) => labTestMeans.find((m) => m.externalId === id))
         .filter((m): m is LabTestMean => !!m);
-      if (rootBenches.length === 0) {
+      // A save can legitimately have no root at all (every selected bench was
+      // hidden before saving). Only complain when it HAD roots and none of
+      // them survive in the catalogue.
+      if (save.rootExternalIds.length > 0 && rootBenches.length === 0) {
         setSaveError("None of this save's root benches exist in the catalogue anymore.");
         return;
       }
@@ -237,11 +354,18 @@ export default function InteractionClient() {
         </div>
         <div className="flex items-center gap-1.5">
           <SaveLoadControls
+            middleSlot={
+              <DiagramExportMenu
+                disabled={graphNodeCount === 0}
+                busy={exporting}
+                onExport={(format) => void handleExport(format)}
+              />
+            }
             activeSaveName={activeSaveName}
             dirty={dirty}
             saves={saves}
             errorMessage={saveError}
-            disableSave={selectedBenches.length === 0}
+            disableSave={graphNodeCount === 0}
             onSaveAs={handleSaveAs}
             onSave={handleSave}
             onLoad={handleLoadSave}
@@ -254,8 +378,49 @@ export default function InteractionClient() {
           <DisplaySettingsControl />
         </div>
       </div>
+      {seedExpired && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-sm text-fg"
+        >
+          <span>
+            That link has expired — selections opened from the catalogue stay
+            valid for 30 minutes, and each link can only be opened once. Open
+            it again from the catalogue.
+          </span>
+          <button
+            type="button"
+            onClick={() => setSeedExpired(false)}
+            className="shrink-0 text-xs text-muted underline underline-offset-2 hover:text-accent"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+      {exportError && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-fg"
+        >
+          <span>{exportError}</span>
+          <button
+            type="button"
+            onClick={() => setExportError(null)}
+            className="shrink-0 text-xs text-muted underline underline-offset-2 hover:text-accent"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <div className="relative flex-1">
-        {selectedBenches.length > 0 ? (
+        {/* `pendingLoad` belongs in this test, and it is not redundant: the
+            effect that applies a save lives INSIDE the diagram, so a save
+            whose `rootExternalIds` is empty (every selected bench was hidden
+            before saving) would leave the selection empty, the canvas empty,
+            the diagram unmounted — and the load would silently never run.
+            The content of a save is only knowable once the component holding
+            it exists, so the intent to load has to be enough to mount it. */}
+        {selectedBenches.length > 0 || graphNodeCount > 0 || pendingLoad !== null ? (
           <DependencyGraph
             ref={graphRef}
             benches={selectedBenches}
@@ -263,6 +428,8 @@ export default function InteractionClient() {
             onDirty={handleDirty}
             pendingLoad={pendingLoad}
             onPendingLoadConsumed={handlePendingLoadConsumed}
+            onRootHidden={handleRootHidden}
+            onNodeCountChange={setGraphNodeCount}
           />
         ) : (
           <InteractionEmptyState reason="no-selection" />

@@ -8,7 +8,6 @@ import ThemeToggle from "./ThemeToggle";
 import AboutDialog from "./AboutDialog";
 import RefreshButton from "./RefreshButton";
 import PhotoCacheSettingsControl from "./PhotoCacheSettingsControl";
-import { resetCatalogueFilters } from "@/lib/catalogueFilters";
 
 export default function Header() {
   // usePathname() is typed `string | null` in some Next versions (e.g. 16.2.9)
@@ -60,11 +59,11 @@ export default function Header() {
         </Link>
 
         <nav className="flex items-center gap-1">
-          <Link
-            href="/"
-            onClick={() => resetCatalogueFilters()}
-            className={itemClass(catalogueActive)}
-          >
+          {/* No filter reset here: the selection is shared with /map and
+              /depview (lib/appFilters.ts), so clearing it on a nav click would
+              silently throw away what the other two tabs are showing. The
+              panel's "Clear All" is the explicit way to empty it. */}
+          <Link href="/" className={itemClass(catalogueActive)}>
             Catalogue
           </Link>
           <Link href="/map" className={itemClass(mapActive)}>

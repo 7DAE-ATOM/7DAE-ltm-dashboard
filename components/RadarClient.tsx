@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
-import FilterBar, { type FilterValue } from "@/components/FilterBar";
+import { useState } from "react";
+import FilterPanel from "@/components/FilterPanel";
 import FilterSheet from "@/components/FilterSheet";
 import CircularGraph, {
   RADAR_DEFAULT_RADIUS,
@@ -11,10 +11,8 @@ import CircularGraph, {
 import TooDenseMessage from "@/components/radar/TooDenseMessage";
 import RadarSettingsControl from "@/components/radar/RadarSettingsControl";
 import RadarLegend from "@/components/radar/RadarLegend";
-import BenchVisibilityList from "@/components/radar/BenchVisibilityList";
-import CollapsibleSection from "@/components/radar/CollapsibleSection";
-import { filterLabTestMeans } from "@/lib/labtestmeans";
-import { expandSelection } from "@/lib/aircraftStructure";
+import { useFilteredLabTestMeans } from "@/lib/useFilteredLabTestMeans";
+import { useSharedFilters, setFilters, clearFilters } from "@/lib/appFilters";
 import { useLabTestMeans } from "@/lib/useLabTestMeans";
 import { useRadarDisplaySettings } from "@/lib/radarDisplaySettings";
 
@@ -82,57 +80,43 @@ function RadarLoaded({
   complexities,
   portfolios,
 }: Readonly<LoadedProps>) {
-  // Independent from the catalogue's shared filter store (unlike `/`, like
-  // `/map`) — filtering here shouldn't silently change what the catalogue
-  // shows on return, and vice versa.
-  const [filters, setFilters] = useState<FilterValue>({
-    search: "",
-    photo: "all",
-    qualitySeal: "all",
-    types: [],
-    statuses: [],
-    countries: [],
-    programNodeIds: [],
-    complexities: [],
-    portfolios: [],
-  });
+  // Shared with `/` and `/map` — see `lib/appFilters.ts`. This page used to
+  // hold its own copy so that filtering here wouldn't change what the
+  // catalogue showed on return; carrying one perimeter across the three tabs
+  // is now the point.
+  const { filters, resetToken } = useSharedFilters();
   const [radius, setRadius] = useState(RADAR_DEFAULT_RADIUS);
   const { densityLimit } = useRadarDisplaySettings();
 
-  const visible = useMemo(() => {
-    const { names, includeUnassigned } = expandSelection(
-      tree,
-      filters.programNodeIds,
-    );
-    return filterLabTestMeans(labTestMeans, {
-      ...filters,
-      programNodeNames: names,
-      includeUnassignedPrograms: includeUnassigned,
-    });
-  }, [labTestMeans, tree, filters]);
-
-  // Second, finer-grained refinement step on top of the coarse filters above
-  // — individually hidden benches, independent of `filters` so a bench
-  // hidden this way stays hidden across filter changes (see
-  // `liste-bancs-masquables-dependency-view.md`).
-  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
-  const toggleBenchVisibility = useCallback((externalId: string) => {
-    setHiddenIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(externalId)) next.delete(externalId);
-      else next.add(externalId);
-      return next;
-    });
-  }, []);
-  const selectAllBenches = useCallback(() => setHiddenIds(new Set()), []);
-  const deselectAllBenches = useCallback(() => {
-    setHiddenIds(new Set(visible.map((b) => b.externalId)));
-  }, [visible]);
-
-  const shown = useMemo(
-    () => visible.filter((b) => !hiddenIds.has(b.externalId)),
-    [visible, hiddenIds],
+  // `selectable` is what the coarse axes kept — the candidate list offered by
+  // the bench visibility chapter. `shown` is that minus the individually
+  // excluded benches, which is what the graph renders.
+  const { selectable, visible: shown, countUnder } = useFilteredLabTestMeans(
+    labTestMeans,
+    tree,
+    filters,
   );
+
+  // One object for the desktop panel and the mobile sheet — see CatalogueClient.
+  // The per-bench visibility list is no longer injected here: it is a chapter
+  // of FilterBar now, fed by `selectableBenches`, so this page renders exactly
+  // the same panel as the other two.
+  const barProps = {
+    types,
+    statuses,
+    countries,
+    tree,
+    programCounts,
+    hasUnassignedPrograms,
+    complexities,
+    portfolios,
+    value: filters,
+    onChange: setFilters,
+    onClear: clearFilters,
+    programResetToken: resetToken,
+    selectableBenches: selectable,
+    previewCount: countUnder,
+  };
 
   return (
     <div className="relative h-[calc(100vh-57px)]">
@@ -170,58 +154,14 @@ function RadarLoaded({
         <RadarSettingsControl />
       </div>
 
-      <div className="absolute top-4 left-4 w-[340px] max-h-[calc(100%-2rem)] glass-panel p-5 overflow-y-auto z-10 hidden lg:block">
-        <div className="mb-3 text-xs text-muted font-mono">
-          {shown.length} / {labTestMeans.length} lab test means
-        </div>
-        <CollapsibleSection title="Filters" defaultOpen={false}>
-          <FilterBar
-            types={types}
-            statuses={statuses}
-            countries={countries}
-            tree={tree}
-            programCounts={programCounts}
-            hasUnassignedPrograms={hasUnassignedPrograms}
-            complexities={complexities}
-            portfolios={portfolios}
-            value={filters}
-            onChange={setFilters}
-          />
-        </CollapsibleSection>
-        {visible.length > 0 && (
-          <BenchVisibilityList
-            benches={visible}
-            hiddenIds={hiddenIds}
-            onToggle={toggleBenchVisibility}
-            onSelectAll={selectAllBenches}
-            onDeselectAll={deselectAllBenches}
-          />
-        )}
-      </div>
-      <FilterSheet
-        types={types}
-        statuses={statuses}
-        countries={countries}
-        tree={tree}
-        programCounts={programCounts}
-        hasUnassignedPrograms={hasUnassignedPrograms}
-        complexities={complexities}
-        portfolios={portfolios}
-        value={filters}
-        onChange={setFilters}
+      {/* `lg:flex`, not `lg:block` — see the note on FilterPanel.className. */}
+      <FilterPanel
+        {...barProps}
         count={shown.length}
-        extraContent={
-          visible.length > 0 ? (
-            <BenchVisibilityList
-              benches={visible}
-              hiddenIds={hiddenIds}
-              onToggle={toggleBenchVisibility}
-              onSelectAll={selectAllBenches}
-              onDeselectAll={deselectAllBenches}
-            />
-          ) : undefined
-        }
+        total={labTestMeans.length}
+        className="absolute left-4 top-4 z-10 hidden lg:flex w-[340px] max-h-[calc(100vh-100px)]"
       />
+      <FilterSheet {...barProps} count={shown.length} />
     </div>
   );
 }

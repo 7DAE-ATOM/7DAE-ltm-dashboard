@@ -1,4 +1,8 @@
 import type { DependencyRelationKind } from "@/lib/types";
+import {
+  DEPENDENCY_LEVEL_ITEMS,
+  dependencyStrokeStyle,
+} from "@/lib/dependencyEdgeStyle";
 
 // Same 3 relation kinds as `/depgraph` (see `DependencyLegend.tsx`), but kept
 // separate here (not merged into 2) since `buildRadarGraph.ts` already
@@ -16,10 +20,10 @@ const RELATION_ITEMS: { kind: DependencyRelationKind; label: string }[] = [
 // Purely explanatory — line style is orthogonal to the hover colors above
 // (it comes from `dependencyType`, cf. `buildRadarGraph.ts`), always visible
 // regardless of hover, same convention as `/depgraph`'s `DependencyLegend`.
-const LINE_STYLE_ITEMS: { label: string; dasharray?: string }[] = [
-  { label: "Mandatory" },
-  { label: "Optional", dasharray: "4 3" },
-];
+const LINE_STYLE_ITEMS = DEPENDENCY_LEVEL_ITEMS.map((item) => ({
+  ...item,
+  stroke: dependencyStrokeStyle(item.type),
+}));
 
 export default function RadarLegend() {
   return (
@@ -44,7 +48,7 @@ export default function RadarLegend() {
       ))}
       <div className="my-1 border-t border-border" />
       <span className="px-2 pb-1 text-[0.65rem] uppercase tracking-wider text-muted">
-        Dependency
+        Dependency level
       </span>
       {LINE_STYLE_ITEMS.map((item) => (
         <div key={item.label} className="flex items-center gap-2 px-2 py-1 text-xs text-fg/90">
@@ -56,7 +60,8 @@ export default function RadarLegend() {
               y2="5"
               stroke="var(--color-fg)"
               strokeWidth="2"
-              strokeDasharray={item.dasharray}
+              strokeDasharray={item.stroke.strokeDasharray}
+              strokeLinecap={item.stroke.strokeLinecap}
             />
           </svg>
           <span>{item.label}</span>

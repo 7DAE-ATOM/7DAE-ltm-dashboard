@@ -7,6 +7,7 @@ import { serializeFilters } from "@/lib/filterDescription";
 import { NEXT_PUBLIC_ATOM_API_BASE_URL } from "@/lib/atom-api";
 import { photoKey, type CachedPhoto } from "@/lib/usePhoto";
 import type { AircraftStructureNode, CoverPhoto, LabTestMean } from "@/lib/types";
+import { downloadBlob, exportDateStamp } from "@/lib/downloadBlob";
 
 type Params = {
   visible: LabTestMean[];
@@ -74,14 +75,7 @@ export function useExportPdf({ visible, totalCount, filters, tree }: Params) {
           baseUrl: globalThis.location.origin,
         }),
       ).toBlob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `ltm-export-${new Date().toISOString().slice(0, 10)}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `ltm-export-${exportDateStamp()}.pdf`);
     } catch (e) {
       alert(`Export failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {

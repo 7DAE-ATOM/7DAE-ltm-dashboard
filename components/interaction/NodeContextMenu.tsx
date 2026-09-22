@@ -11,7 +11,6 @@ export type NodeContextMenuTarget = {
   supportsCount: number;
   sharedResourcesCount: number;
   usableByCount: number;
-  canHide: boolean;
 };
 
 type Props = {
@@ -131,12 +130,11 @@ export default function NodeContextMenu({
       <button
         type="button"
         role="menuitem"
-        disabled={!target.canHide}
         onClick={() => {
           onHide(target.nodeId);
           onClose();
         }}
-        className={menuItemClass(target.canHide)}
+        className={menuItemClass(true)}
       >
         <span>Hide</span>
       </button>

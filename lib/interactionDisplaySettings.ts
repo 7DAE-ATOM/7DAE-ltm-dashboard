@@ -8,7 +8,7 @@ import { useSyncExternalStore } from "react";
  * survives a reload — deliberately NOT part of `InteractionSave` (see
  * `lib/interactionSaves.ts`), per spec.
  *
- * Same external-store pattern as `lib/catalogueFilters.ts`
+ * Same external-store pattern as `lib/radarDisplaySettings.ts`
  * (`useSyncExternalStore`), plus the localStorage persistence already used by
  * `lib/useTheme.ts` / `lib/interactionSaves.ts`.
  */
@@ -20,6 +20,11 @@ export type InteractionDisplaySettings = {
   showBuilding: boolean;
   showRoom: boolean;
   nodeWidth: number;
+  /** How pronounced the bow on an edge is, 0–100. 50 is the historical
+   * rendering; 0 draws straight lines, 100 twice the default bow. An edge the
+   * user has bent by hand ignores this — see
+   * `lib/interactionEdgeCurvature.ts`. */
+  edgeCurvature: number;
 };
 
 const STORAGE_KEY = "interaction-display-settings";
@@ -29,6 +34,11 @@ const STORAGE_KEY = "interaction-display-settings";
 export const NODE_WIDTH_MIN = 160;
 export const NODE_WIDTH_MAX = 300;
 
+export const EDGE_CURVATURE_MIN = 0;
+export const EDGE_CURVATURE_MAX = 100;
+/** The value that reproduces the rendering from before the setting existed. */
+export const EDGE_CURVATURE_NEUTRAL = 50;
+
 const DEFAULT_SETTINGS: InteractionDisplaySettings = {
   showQualitySeal: true,
   showType: true,
@@ -37,6 +47,7 @@ const DEFAULT_SETTINGS: InteractionDisplaySettings = {
   showBuilding: true,
   showRoom: true,
   nodeWidth: 200,
+  edgeCurvature: EDGE_CURVATURE_NEUTRAL,
 };
 
 let state: InteractionDisplaySettings = DEFAULT_SETTINGS;
@@ -52,6 +63,12 @@ function pickNodeWidth(parsed: Record<string, unknown>, fallback: number): numbe
   const v = parsed.nodeWidth;
   if (typeof v !== "number") return fallback;
   return Math.min(NODE_WIDTH_MAX, Math.max(NODE_WIDTH_MIN, v));
+}
+
+function pickEdgeCurvature(parsed: Record<string, unknown>, fallback: number): number {
+  const v = parsed.edgeCurvature;
+  if (typeof v !== "number") return fallback;
+  return Math.min(EDGE_CURVATURE_MAX, Math.max(EDGE_CURVATURE_MIN, v));
 }
 
 function hydrate(): void {
@@ -70,6 +87,7 @@ function hydrate(): void {
         showBuilding: pickBool(parsed, "showBuilding", DEFAULT_SETTINGS.showBuilding),
         showRoom: pickBool(parsed, "showRoom", DEFAULT_SETTINGS.showRoom),
         nodeWidth: pickNodeWidth(parsed, DEFAULT_SETTINGS.nodeWidth),
+        edgeCurvature: pickEdgeCurvature(parsed, DEFAULT_SETTINGS.edgeCurvature),
       };
     }
   } catch {
