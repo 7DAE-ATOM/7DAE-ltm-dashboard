@@ -1,5 +1,7 @@
 # LTM Dashboard
 
+Read-only Next.js dashboard for Airbus Lab Test Means: catalogue, map, bench details, lifecycle and bench-to-bench dependency graphs. Data served by the atom-synchronizer API.
+
 A Next.js 16 / React 19 dashboard visualizing Airbus **Lab Test Means** (LTM) — physical test benches, their locations, lifecycle state, and their dependencies on each other. It is a read-only client for the `atom-synchronizer-dev` backend API, built as a static site and deployed behind nginx.
 
 ## Screens
