@@ -3,10 +3,14 @@
 import { useState } from "react";
 import { useSWRConfig } from "swr";
 import { SWR_KEY_LTM, SWR_KEY_TREE } from "@/lib/useLabTestMeans";
+import { SWR_KEY_KPI } from "@/lib/kpi/useKpiLabTestMeans";
 
 /**
- * Forces a re-fetch of the lab test means + aircraft tree (the only data with no
- * automatic revalidation — see `Providers`). Photo caches are left untouched.
+ * Forces a re-fetch of the lab test means + aircraft tree, and of the KPI
+ * page's data (the only data with no automatic revalidation — see
+ * `Providers`). SWR only re-fetches a key some page has loaded, so the KPI
+ * query costs nothing until the KPI page was visited. Photo caches are left
+ * untouched.
  */
 export default function RefreshButton() {
   const { mutate } = useSWRConfig();
@@ -16,7 +20,7 @@ export default function RefreshButton() {
     if (spinning) return;
     setSpinning(true);
     try {
-      await Promise.all([mutate(SWR_KEY_LTM), mutate(SWR_KEY_TREE)]);
+      await Promise.all([mutate(SWR_KEY_LTM), mutate(SWR_KEY_TREE), mutate(SWR_KEY_KPI)]);
     } finally {
       setSpinning(false);
     }

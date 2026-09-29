@@ -33,6 +33,7 @@ When a refactor deletes routes or pages, `.next/` often holds stale chunks and d
 - `/labtestmean?id=<externalId>` → detail page with photo gallery, security/access, lifecycle timeline, people, programs/projects. This is a **single static page** (`app/labtestmean/page.tsx`) that reads the `id` query param via `useSearchParams()` and fetches client-side. It is intentionally **not** a dynamic `[externalId]` route: under `output: "export"` a dynamic segment would require pre-generating every id (or breaks on unknown ids), so the query-param form keeps it fully dynamic with zero pre-generation.
 - `/depgraph` → React Flow dependency diagram (`InteractionClient`), roots read from `?ids=<externalId,…>`. A `?seed=<token>` from the catalogue's ACTIONS block is converted to that canonical `?ids=` form on arrival (`lib/depgraphSeed.ts`) — on this page `?ids=` IS the live selection, so nothing downstream needs to know about seeds.
 - `/depview` → radial SVG dependency view (`RadarClient`).
+- `/kpi` → data-quality KPIs of the Lab Test Means (`components/kpi/KpiClient.tsx`): nine filters, six charts (four of them filter on click), a Photos card and a sortable, paginated table. Its filters and table order live in the ADDRESS (`lib/useUrlState.ts`, ported from the cockpit), not in `lib/appFilters.ts` — it shares nothing with the other pages' filters. Spec: `_specification/vibe coding/kpi-lab-test-means.md`.
 - `/health` → static JSON `{ "status": "ok" }`, used by the Helm chart's liveness/readiness probes.
 
 There is **no** mock JSON, **no** `/bench/` segment, **no** `/d/<direction>` segment, and **no** panorama viewer. All three belonged to earlier iterations and have been deleted — do not reintroduce.
@@ -94,6 +95,8 @@ Storage level: `localStorage` for display preferences (they outlive the tab and 
 Spring Boot **`atom-synchronizer-dev`** served at `http://localhost:8080/atom-synchronizer-dev` with Springdoc OpenAPI at `/v3/api-docs`. Its `LabTestMean` entity (`GET /api/infos/labtestmeans`) is the single source of truth for the dashboard. The OpenAPI spec covers ~42 endpoints across sync processes, ATOM reads, KPIs, and connectivity healthchecks to LeanIX / Alfabet / ADAM / Google.
 
 Override the base URL via `ATOM_API_BASE_URL` (read in `lib/atom-api.ts`).
+
+**The KPI page reads LeanIX through the synchronizer's GraphQL proxy**, not the REST route: `postLeanixQuery()` in `lib/atom-api.ts` → `POST {base}/api/leanix/graphql/query` with `{"query": "…"}` (path overridable with `NEXT_PUBLIC_ATOM_API_LEANIX_GRAPHQL_PATH`). The proxy is READ-ONLY — it rejects anything but a `query` operation — and relays with a technical token, so no LeanIX token reaches the browser. A 200 carrying a non-empty `errors[]` is an error (thrown, `LEANIX_GRAPHQL:` prefix). `allFactSheets` is paginated: `lib/kpi/leanixPages.ts` follows every page or fails (at most 100 pages, 30 s per page — **not measured yet**, time it). The query is in `lib/kpi/kpiLabTestMeans.ts`; it is loaded through SWR (`SWR_KEY_KPI`, refreshed by the Header button) only when `/kpi` is visited. A JSON POST triggers a CORS preflight the GETs never did: if it fails while the GETs work, suspect the proxy's `OPTIONS` handling. GraphQL is meant to replace the REST routes over time.
 
 ## Slash commands
 

@@ -25,6 +25,7 @@ export default function Header() {
     pathname === "/depgraph" || pathname.startsWith("/depgraph/");
   const depViewActive =
     pathname === "/depview" || pathname.startsWith("/depview/");
+  const kpiActive = pathname === "/kpi" || pathname.startsWith("/kpi/");
 
   const itemClass = (active: boolean) =>
     clsx(
@@ -75,6 +76,9 @@ export default function Header() {
           </Link>
           <Link href="/depview" className={itemClass(depViewActive)}>
             Dependency View
+          </Link>
+          <Link href="/kpi" className={itemClass(kpiActive)}>
+            KPI
           </Link>
         </nav>
 

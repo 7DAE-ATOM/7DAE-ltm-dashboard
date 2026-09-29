@@ -139,9 +139,10 @@ const FETCH_TIMEOUT_MS = 15_000;
 async function atomFetch(
   url: string,
   init: RequestInit & { next?: { revalidate?: number } },
+  timeoutMs: number = FETCH_TIMEOUT_MS,
 ): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   // Auth header is DEV-ONLY: in production the app is served same-origin behind
   // the AFTER Istio gateway, which injects the user's `Authorization: Bearer`
   // from the session cookies — the SPA adds nothing. In dev there is no gateway,
@@ -180,7 +181,7 @@ async function atomFetch(
         // `ATOM_BACKEND_DOWN:` is a machine-readable prefix consumed by
         // `app/error.tsx` to render the dedicated "API unavailable" screen.
         // Keep the prefix stable; the human-readable suffix may change.
-        `ATOM_BACKEND_DOWN: timeout after ${FETCH_TIMEOUT_MS}ms at ${url}`,
+        `ATOM_BACKEND_DOWN: timeout after ${timeoutMs}ms at ${url}`,
         { kind: "backend-down", status: 0, statusText: "Timeout", cause, ...baseDetails },
       );
     }
@@ -297,4 +298,49 @@ export async function fetchCurrentUser(): Promise<CurrentUserDto> {
   const res = await atomFetch(url, {});
   if (!res.ok) httpError(res, url);
   return (await res.json()) as CurrentUserDto;
+}
+
+/** The synchronizer's read-only LeanIX GraphQL passthrough. Same override
+ * name as the cockpit: one proxy, one variable. */
+export const LEANIX_GRAPHQL_PATH =
+  process.env.NEXT_PUBLIC_ATOM_API_LEANIX_GRAPHQL_PATH ??
+  "/api/leanix/graphql/query";
+
+/** `POST /api/leanix/graphql/query` with `{ query }` — READ-ONLY: the proxy
+ * (`LeanIXGraphQLProxyController` in 7DAE-atom-synchronizer) rejects anything
+ * but a `query` operation with a 400 and relays with a technical token, so no
+ * LeanIX token reaches the browser. First GraphQL client of this app (the KPI
+ * page, `lib/kpi/`).
+ *
+ * Returns the parsed body. A 200 carrying a non-empty `errors[]` is an ERROR:
+ * thrown with the `LEANIX_GRAPHQL:` prefix (generic error screen). A JSON POST
+ * triggers a CORS preflight that the GETs never did: if it fails while the
+ * GETs work, suspect the proxy's `OPTIONS` handling. */
+export async function postLeanixQuery(
+  query: string,
+  timeoutMs: number,
+): Promise<unknown> {
+  const url = `${NEXT_PUBLIC_ATOM_API_BASE_URL}${LEANIX_GRAPHQL_PATH}`;
+  const res = await atomFetch(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    },
+    timeoutMs,
+  );
+  if (!res.ok) httpError(res, url);
+  const body = (await res.json()) as { errors?: unknown } | null;
+  const errors = body?.errors;
+  if (Array.isArray(errors) && errors.length > 0) {
+    const cause = errors
+      .map((e) => (e as { message?: unknown })?.message)
+      .filter((m): m is string => typeof m === "string")
+      .join("; ");
+    throw new Error(
+      `LEANIX_GRAPHQL: ${cause || "LeanIX reported an error without a message."}`,
+    );
+  }
+  return body;
 }

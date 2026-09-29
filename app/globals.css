@@ -30,6 +30,15 @@
   --color-graph-shared-resource: #fb923c;
   --color-radar-out: #f59e0b;
   --color-radar-in: #22d3ee;
+
+  /* One colour per Lab Test Mean type on the KPI page charts. CATEGORICAL:
+     the type name is always written beside its slice. The other KPI charts
+     use the semantic tokens above. Same values as the ATOM cockpit. */
+  --color-ltm-simulator: #a5b4fc;
+  --color-ltm-sib: #7dd3fc;
+  --color-ltm-fib: #5eead4;
+  --color-ltm-rt: #c4b5fd;
+  --color-ltm-shared: #fcd34d;
 }
 
 :root[data-theme="light"] {
@@ -49,6 +58,12 @@
   --color-graph-shared-resource: #c2410c;
   --color-radar-out: #b45309;
   --color-radar-in: #0e7490;
+
+  --color-ltm-simulator: #4f46e5;
+  --color-ltm-sib: #0284c7;
+  --color-ltm-fib: #0d9488;
+  --color-ltm-rt: #7c3aed;
+  --color-ltm-shared: #d97706;
 }
 
 /* Dependency graph hover trace — toggled imperatively on the DOM (not via
@@ -159,6 +174,23 @@ a {
 }
 .skeleton-pulse {
   animation: skeleton-pulse 1.6s ease-in-out infinite;
+}
+
+/*
+ * KPI page bars grow in from the left on every mount (a new filter, a new
+ * page of the table), with no JavaScript; their width then glides when the
+ * figures change. Callers stagger with an inline `animation-delay`. Nothing
+ * moves under "reduce motion".
+ */
+@keyframes chart-grow-x {
+  from { transform: scaleX(0); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chart-grow-x {
+    transform-origin: left;
+    animation: chart-grow-x 700ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    transition: width 500ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
 }
 
 /*
