@@ -38,7 +38,7 @@ export const GEO_MAP: Record<string, { lat: number; lng: number }> = {
 
 // Keyed by the backend category lowercased (see `toType`) so casing variants
 // like "RT"/"rt" or "SHARE"/"share" all resolve.
-const TYPE_MAP: Record<string, LabTestMeanType> = {
+export const TYPE_MAP: Record<string, LabTestMeanType> = {
   sib: "SIB",
   simu: "SIMU",
   fib: "FIB",
@@ -122,7 +122,7 @@ function toRelations(
 
 /** APPROVED and BROKEN_QUALITY_SEAL are both "released" as far as the UI is
  * concerned; DRAFT, and anything absent or unexpected, defaults to DRAFT. */
-function toLxTag(raw: string | null | undefined): "DRAFT" | "RELEASE" {
+export function toLxTag(raw: string | null | undefined): "DRAFT" | "RELEASE" {
   return raw === "APPROVED" || raw === "BROKEN_QUALITY_SEAL" ? "RELEASE" : "DRAFT";
 }
 

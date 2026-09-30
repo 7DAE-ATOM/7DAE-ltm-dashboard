@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import clsx from "clsx";
 import ThemeToggle from "./ThemeToggle";
+import UserMenu from "./UserMenu";
 import AboutDialog from "./AboutDialog";
 import RefreshButton from "./RefreshButton";
 import PhotoCacheSettingsControl from "./PhotoCacheSettingsControl";
@@ -24,6 +25,7 @@ export default function Header() {
     pathname === "/depgraph" || pathname.startsWith("/depgraph/");
   const depViewActive =
     pathname === "/depview" || pathname.startsWith("/depview/");
+  const kpiActive = pathname === "/kpi" || pathname.startsWith("/kpi/");
 
   const itemClass = (active: boolean) =>
     clsx(
@@ -75,14 +77,18 @@ export default function Header() {
           <Link href="/depview" className={itemClass(depViewActive)}>
             Dependency View
           </Link>
+          <Link href="/kpi" className={itemClass(kpiActive)}>
+            KPI
+          </Link>
         </nav>
 
         <div className="ml-auto flex items-center gap-2 min-h-[32px]">
-          {/* RESERVED: avatar, global search, notifications (V2) */}
+          {/* RESERVED: global search, notifications (V2) */}
           <RefreshButton />
           <AboutDialog />
           <PhotoCacheSettingsControl />
           <ThemeToggle />
+          <UserMenu />
         </div>
       </div>
     </header>
