@@ -4,9 +4,9 @@
 
 Ajouter au LTM Board une page **KPI** (`/kpi`, entrée « KPI » du bandeau) qui montre la qualité des données des moyens d'essai (fact sheets **Solution** de LeanIX) :
 
-1. une **barre de filtres** à neuf critères, à valeurs multiples ;
+1. une **barre de filtres** à onze critères, à valeurs multiples ;
 2. un **chiffre de périmètre** (« 124 of 180 Lab Test Means in scope ») ;
-3. **six graphiques de répartition**, dont quatre cliquables comme des filtres ;
+3. **six graphiques de répartition**, dont quatre cliquables comme des filtres, et une **carte Completion distribution** qui filtre aussi ;
 4. une **carte Photos** qui mesure la présence de photos sur les bancs ;
 5. un **tableau** triable et paginé des bancs du périmètre.
 
@@ -25,7 +25,7 @@ Le catalogue du LTM Board montre les bancs un par un ; rien ne dit combien sont 
 #### A. Page
 
 1. Une route `/kpi` et une entrée **KPI** dans le bandeau, après « Dependency View ».
-2. **Filtres et tri du tableau sont dans l'URL** : un lien partagé montre la même vue, un rechargement ne perd rien, les valeurs par défaut n'apparaissent pas dans l'adresse. Paramètres : `portfolio`, `country`, `type`, `shared`, `program`, `ata`, `ec`, `complexity`, `seal` (listes séparées par « | »), `order`.
+2. **Filtres et tri du tableau sont dans l'URL** : un lien partagé montre la même vue, un rechargement ne perd rien, les valeurs par défaut n'apparaissent pas dans l'adresse. Paramètres : `portfolio`, `country`, `type`, `shared`, `program`, `ata`, `ec`, `complexity`, `seal`, `photos`, `completion` (listes séparées par « | »), `order`.
 3. Les filtres de la page KPI sont **indépendants** de ceux du catalogue, de la carte et de la Dependency View (mémorisés en session) : l'une ne modifie jamais les autres.
 
 #### B. Données
@@ -40,32 +40,39 @@ Le catalogue du LTM Board montre les bancs un par un ; rien ne dit combien sont 
 
 #### C. Filtres
 
-11. Neuf filtres, dans cet ordre : Portfolio, Country, LTM Type, Shared, Aircraft Program, ATA, Export control level, Complexity, Quality seal. Pas de filtre Part IS applicability : `partIS` est lu mais pas encore renseigné dans LeanIX.
+11. Onze filtres, dans cet ordre : Portfolio, Country, LTM Type, Shared, Aircraft Program, ATA, Export control level, Complexity, Quality seal, Photos (tranches No photo / 1 photo / 2–4 photos / 5+ photos), Completion (tranches 0–24 / 25–49 / 50–74 / 75–89 / 90–100 %). Pas de filtre Part IS applicability : `partIS` est lu mais pas encore renseigné dans LeanIX.
 12. Plusieurs valeurs par filtre (**OU**), filtres combinés en **ET** ; Portfolio, Aircraft Program et ATA sont multivalués : un banc est retenu s'il porte au moins une valeur choisie.
 13. Pastilles supprimables des choix actifs, bouton « Reset all ». Les listes ne proposent que les valeurs présentes dans les données.
 
 #### D. Graphiques
 
-14. Six graphiques :
+14. Huit cartes dans une seule grille (3 colonnes sur grand écran), dans cet ordre :
 
-    | Graphique | Champ | Forme | Filtre |
-    | --- | --- | --- | --- |
-    | Quality Seal | `lxState` | anneau | Quality seal |
-    | Configuration management plan | `cmpAvailability` | anneau | aucun |
-    | LTM Access Control | `accesscontrol` | anneau | aucun |
-    | LTM Type Repartition | `category` | barres | LTM Type |
-    | LTM Complexity Repartition | `complexity` | barres | Complexity |
-    | LTM Export Control | `ecLevel` | barres | Export control level |
+    | Ligne | Carte | Champ | Forme | Filtre |
+    | --- | --- | --- | --- | --- |
+    | 1 | LTM Type Repartition | `category` | barres | LTM Type |
+    | 1 | LTM Complexity Repartition | `complexity` | barres | Complexity |
+    | 1 | LTM Export Control | `ecLevel` | barres | Export control level |
+    | 2 | Configuration management plan | `cmpAvailability` | anneau | aucun |
+    | 2 | LTM Access Control | `accesscontrol` | anneau | aucun |
+    | 2 | Quality Seal | `lxState` | anneau | Quality seal |
+    | 3 | Completion distribution | `completion.percentage` | colonnes | Completion |
+    | 3 | LTM Photos (sur 2 colonnes) | `documents` | tuiles | Photos |
 
 15. Le titre de la carte n'affiche pas le nom du champ LeanIX. Seuls les graphiques filtrants portent l'étiquette « Filter » ; les autres n'en ont aucune. Une note n'apparaît que lorsqu'une valeur est choisie (« Filtering on … »). Par valeur : nombre de bancs et pourcentage ; l'anneau porte le total en son centre.
 16. Un clic sur une part ou une barre d'un graphique filtrant ajoute la valeur au filtre, un second clic l'en retire.
 17. Chaque graphique compte le périmètre filtré par les autres critères, **sans le sien** : la valeur choisie est surlignée, les autres estompées, à leur vraie taille.
 18. La couleur n'est jamais le seul repère (libellé, nombre, pourcentage) ; chaque élément cliquable est un bouton accessible au clavier qui annonce s'il est sélectionné.
 
+#### D bis. Carte Completion distribution
+
+18 bis. Histogramme vertical, sous-titre « Lab Test Means per completion band » : cinq colonnes **toujours affichées**, même vides — 0–24 %, 25–49 %, 50–74 %, 75–89 %, 90–100 % — avec le nombre au-dessus et la tranche en dessous. Couleurs de la barre de complétion du tableau : orange sous 50 %, bleu clair de 50 à 89 %, bleu à partir de 90 % ; légende « Below 50 % — needs attention », « 50 – 89 % », « 90 % and above — complete ».
+18 ter. **Filtre** (étiquette « Filter ») : un clic ajoute la tranche au filtre Completion, un second l'en retire ; la carte compte **sans son propre filtre**, la tranche choisie surlignée, les autres estompées.
+
 #### E. Carte Photos
 
-19. Carte pleine largeur : pourcentage de bancs ayant au moins une photo, nombre de bancs illustrés, nombre total de photos, moyenne par banc illustré ; quatre tuiles **No photo** (orange), **1 photo**, **2–4 photos**, **5+ photos**.
-20. **Pas un filtre** (sans étiquette ni nom de champ) : les tuiles ne filtrent pas. Elle compte le périmètre (tous filtres appliqués).
+19. Carte sur deux colonnes. En-tête sur une ligne : titre, pourcentage de bancs avec au moins une photo, nombre total de photos, étiquette « Filter » ; dessous, les quatre tuiles se partagent toute la largeur. Détail (bancs illustrés, moyenne par banc illustré) en infobulle du nombre de photos. Contenu : pourcentage de bancs ayant au moins une photo, nombre de bancs illustrés, nombre total de photos, moyenne par banc illustré ; quatre tuiles **No photo** (orange), **1 photo**, **2–4 photos**, **5+ photos**.
+20. **Les tuiles sont des filtres** (étiquette « Filter », sans nom de champ) : un clic ajoute la tranche au filtre Photos, un second l'en retire ; la tranche choisie est surlignée, les autres estompées. La carte compte le périmètre **sans son propre filtre**, comme les graphiques.
 
 #### F. Tableau
 
@@ -127,9 +134,9 @@ Le catalogue du LTM Board montre les bancs un par un ; rien ne dit combien sont 
 
 ## Acceptance Criteria
 
-- [ ] `/kpi` est accessible depuis l'entrée KPI du bandeau et affiche filtres, périmètre, six graphiques, carte Photos et tableau conformément à la maquette.
+- [ ] `/kpi` est accessible depuis l'entrée KPI du bandeau et affiche filtres, périmètre, les huit cartes dans l'ordre de l'exigence 14 et le tableau.
 - [ ] Les données viennent du proxy GraphQL, toutes pages suivies, une fois par session ; « Refresh data » les recharge.
-- [ ] Filtres multi-valeurs (OU / ET) ; quatre graphiques filtrent au clic, deux et la carte Photos ne filtrent pas ; chaque graphique compte sans son propre filtre.
+- [ ] Filtres multi-valeurs (OU / ET) ; quatre graphiques, la carte Completion distribution et la carte Photos filtrent au clic, deux graphiques ne filtrent pas ; chaque graphique compte sans son propre filtre.
 - [ ] Tableau triable (« Not set » en dernier) et paginé ; le nom ouvre la fiche du banc.
 - [ ] Filtres et tri dans l'URL ; les filtres des autres pages ne sont pas affectés.
 - [ ] Types, quality seal, pays, complexité et photos se lisent comme dans le catalogue.

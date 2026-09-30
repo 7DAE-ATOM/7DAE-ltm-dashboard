@@ -1,28 +1,29 @@
 /***********************************************************
  * KpiClient — The KPI page: the data quality of the Lab Test Means,
- * filterable nine ways.
+ * filterable eleven ways.
  *
- *   KPI — what this page measures
+ *   KPI — Explore key metrics related to lab test data
  *   [ Filters ………………………………………………………………… ]
  *   124  of 180 Lab Test Means in scope
- *   [Quality Seal ◯] [Config. mgmt plan ◯] [Access control ◯]
- *   [LTM Type ▤    ] [Complexity ▤       ] [Export control ▤ ]
- *   [ LTM Photos — 66 % with at least one photo · 4 band tiles ]
- *   [ Lab Test Means in scope — sortable, paginated table      ]
+ *   [LTM Type ▤         ] [Complexity ▤        ] [Export control ▤ ]
+ *   [Config. mgmt plan ◯] [Access control ◯    ] [Quality Seal ◯   ]
+ *   [Completion ▥       ] [ LTM Photos — share · 4 band tiles       ]
+ *   [ Lab Test Means in scope — sortable, paginated table             ]
  *
  * File structure:
  *
  *   1. IMPORTS — Next navigation, useUrlState and the list helper, the SWR
  *      hook, the pure figures, the sections.
- *   2. CONSTANTS — CHARTS (field, title, form, the filter it
- *      toggles if any).
+ *   2. CONSTANTS — CHARTS (field → title, form, the filter it toggles if
+ *      any), CARD_COUNT.
  *   3. FUNCTIONS — KpiSkeleton().
  *   4. COMPONENT FUNCTION —
- *      a. URL state — the nine filters and the table order.
+ *      a. URL state — the eleven filters and the table order.
  *      b. Data — the SWR hook; errors thrown to app/error.tsx.
  *      c. Handlers — add(), remove(), toggle(), reset().
  *      d. Derived data — the known filters, the scope, the notes.
- *      e. JSX return — heading, filters, scope, charts, photos, table.
+ *      e. JSX return — heading, filters, scope, the card grid in the
+ *         user's order, table.
  *
  * Spec: `_specification/vibe coding/kpi-lab-test-means.md`.
  *
@@ -30,17 +31,22 @@
  * "|", lib/kpi/urlList.ts) plus `order` for the table: a shared link shows
  * the same view and a reload loses nothing. One hook per filter, written
  * out — hooks cannot be called in a loop. RESET writes the address itself
- * in one replace: nine setters in a row would each start from the same stale
+ * in one replace: eleven setters in a row would each start from the same stale
  * address and only the last one would stick. The catalogue's filters
  * (sessionStorage) are not touched.
  *
  * A FILTER VALUE THE DATA DOES NOT KNOW IS IGNORED — a stale link.
  *
- * FOUR CHARTS FILTER, TWO INFORM (spec answer 1). Quality Seal, Type,
- * Complexity and Export Control toggle their filter's value on click; the
- * configuration management plan and access control do not filter, nor does
- * the Photos card. Each filtering chart counts WITHOUT its own filter
- * (`repartition`), so its other slices keep their true size.
+ * SIX CARDS FILTER. Quality Seal, Type, Complexity, Export Control, the
+ * Completion columns and the Photos bands toggle their filter's value on
+ * click; the configuration management plan and access control do not
+ * filter. Each filtering card counts WITHOUT its own filter (`repartition`,
+ * `completionDistribution`, `photoSummary`), so its other values keep their
+ * true size.
+ *
+ * ONE GRID FOR EVERY CARD, three columns at xl, in the order the user set:
+ * Type, Complexity, Export control / CMP, Access, Seal / Completion, then
+ * Photos over two columns.
  *
  * LOADING AND ERRORS FOLLOW THE APP. A skeleton while SWR loads (once per
  * session; the Header's refresh re-fetches); an error is THROWN, so
@@ -59,6 +65,7 @@ import {
   ltmAxisOptions,
   ltmInScope,
   parseLtmOrder,
+  completionDistribution,
   photoSummary,
   repartition,
   serializeLtmOrder,
@@ -73,6 +80,7 @@ import { useKpiLabTestMeans } from "@/lib/kpi/useKpiLabTestMeans";
 import { useUrlState } from "@/lib/useUrlState";
 import KpiFilterBar from "./KpiFilterBar";
 import KpiTable from "./KpiTable";
+import CompletionDistribution from "./CompletionDistribution";
 import PhotoCoverage from "./PhotoCoverage";
 import RepartitionChart from "./RepartitionChart";
 
@@ -80,21 +88,28 @@ import RepartitionChart from "./RepartitionChart";
  * Constants
  ***********************************************************/
 
-/** The six charts, in the mock-up's order: the three donuts, then the bars. */
-const CHARTS: {
-  field: LtmField;
-  title: string;
-  kind: "donut" | "bars";
-  /** The chart toggles this filter on click. Absent: not clickable. */
-  filter?: LtmAxisKey;
-}[] = [
-  { field: "seal", title: "Quality Seal", kind: "donut", filter: "seal" },
-  { field: "cmp", title: "Configuration management plan", kind: "donut" },
-  { field: "access", title: "LTM Access Control", kind: "donut" },
-  { field: "category", title: "LTM Type Repartition", kind: "bars", filter: "category" },
-  { field: "complexity", title: "LTM Complexity Repartition", kind: "bars", filter: "complexity" },
-  { field: "ecLevel", title: "LTM Export Control", kind: "bars", filter: "ecLevel" },
-];
+type ChartField = Extract<LtmField, "seal" | "cmp" | "access" | "category" | "complexity" | "ecLevel">;
+
+/** The six repartition charts; their place on the page is in the JSX. */
+const CHARTS: Record<
+  ChartField,
+  {
+    title: string;
+    kind: "donut" | "bars";
+    /** The chart toggles this filter on click. Absent: not clickable. */
+    filter?: LtmAxisKey;
+  }
+> = {
+  seal: { title: "Quality Seal", kind: "donut", filter: "seal" },
+  cmp: { title: "Configuration management plan", kind: "donut" },
+  access: { title: "LTM Access Control", kind: "donut" },
+  category: { title: "LTM Type Repartition", kind: "bars", filter: "category" },
+  complexity: { title: "LTM Complexity Repartition", kind: "bars", filter: "complexity" },
+  ecLevel: { title: "LTM Export Control", kind: "bars", filter: "ecLevel" },
+};
+
+/** The single-width cards (six charts + Completion); Photos spans two. */
+const CARD_COUNT = 7;
 
 /***********************************************************
  * Functions
@@ -105,11 +120,11 @@ function KpiSkeleton() {
     <div aria-hidden="true" className="flex flex-col gap-4">
       <div className="h-36 rounded-card bg-surface-2 skeleton-pulse" />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {CHARTS.map((chart) => (
-          <div key={chart.field} className="h-72 rounded-card bg-surface-2 skeleton-pulse" />
+        {Array.from({ length: CARD_COUNT }, (_, i) => (
+          <div key={i} className="h-72 rounded-card bg-surface-2 skeleton-pulse" />
         ))}
+        <div className="h-72 rounded-card bg-surface-2 skeleton-pulse md:col-span-2" />
       </div>
-      <div className="h-40 rounded-card bg-surface-2 skeleton-pulse" />
       <div className="h-80 rounded-card bg-surface-2 skeleton-pulse" />
     </div>
   );
@@ -129,6 +144,8 @@ export default function KpiClient() {
   const [ecLevel, setEcLevel] = useUrlState({ param: "ec", ...URL_LIST });
   const [complexity, setComplexity] = useUrlState({ param: "complexity", ...URL_LIST });
   const [seal, setSeal] = useUrlState({ param: "seal", ...URL_LIST });
+  const [photos, setPhotos] = useUrlState({ param: "photos", ...URL_LIST });
+  const [completion, setCompletion] = useUrlState({ param: "completion", ...URL_LIST });
   const [order, setOrder] = useUrlState<LtmOrder>({
     param: "order",
     defaultValue: DEFAULT_LTM_ORDER,
@@ -146,6 +163,8 @@ export default function KpiClient() {
     ecLevel,
     complexity,
     seal,
+    photos,
+    completion,
   };
   const setters: Record<LtmAxisKey, (v: string[]) => void> = {
     portfolio: setPortfolio,
@@ -157,6 +176,8 @@ export default function KpiClient() {
     ecLevel: setEcLevel,
     complexity: setComplexity,
     seal: setSeal,
+    photos: setPhotos,
+    completion: setCompletion,
   };
 
   const router = useRouter();
@@ -188,7 +209,7 @@ export default function KpiClient() {
     else add(key, value);
   }
 
-  /** One replace for all nine parameters — see the header. The order stays. */
+  /** One replace for all eleven parameters — see the header. The order stays. */
   function reset() {
     const params = new URLSearchParams(searchParams.toString());
     for (const axis of LTM_AXES) params.delete(axis.param);
@@ -213,6 +234,22 @@ export default function KpiClient() {
   }
 
   const scope = ltmInScope(ltms, filters);
+
+  /** One repartition chart, counted without its own filter. */
+  function chart(field: ChartField) {
+    const { title, kind, filter } = CHARTS[field];
+    const { total, slices } = repartition(ltms, filters, field);
+    return (
+      <RepartitionChart
+        title={title}
+        field={field}
+        kind={kind}
+        total={total}
+        slices={slices}
+        onPick={filter ? (value) => toggle(filter, value) : undefined}
+      />
+    );
+  }
   const scopeKey = JSON.stringify(filters);
 
   const notes: string[] = [];
@@ -245,24 +282,22 @@ export default function KpiClient() {
           </p>
 
           <section aria-label="Charts" className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {CHARTS.map((chart) => {
-              const { total, slices } = repartition(ltms, filters, chart.field);
-              const key = chart.filter;
-              return (
-                <RepartitionChart
-                  key={chart.field}
-                  title={chart.title}
-                  field={chart.field}
-                  kind={chart.kind}
-                  total={total}
-                  slices={slices}
-                  onPick={key ? (value) => toggle(key, value) : undefined}
-                />
-              );
-            })}
+            {chart("category")}
+            {chart("complexity")}
+            {chart("ecLevel")}
+            {chart("cmp")}
+            {chart("access")}
+            {chart("seal")}
+            <CompletionDistribution
+              slices={completionDistribution(ltms, filters).slices}
+              onPick={(band) => toggle("completion", band)}
+            />
+            <PhotoCoverage
+              className="md:col-span-2"
+              summary={photoSummary(ltms, filters)}
+              onPick={(band) => toggle("photos", band)}
+            />
           </section>
-
-          <PhotoCoverage summary={photoSummary(scope)} />
 
           {/* Remounted when the scope changes, so the table goes back to page 1. */}
           <KpiTable key={scopeKey} ltms={sortLtms(scope, order)} order={order} onOrder={setOrder} />

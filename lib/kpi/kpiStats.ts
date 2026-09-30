@@ -7,12 +7,13 @@
  *   1. IMPORTS — the KpiLtm type and the display orders.
  *   2. TYPES — LtmAxisKey, LtmField, LtmAxis, LtmFilters, Slice,
  *      LtmColumn, LtmOrder, PhotoSummary.
- *   3. CONSTANTS — NOT_SET, LTM_AXES, PHOTO_BANDS, LTM_COLUMNS,
+ *   3. CONSTANTS — NOT_SET, PHOTO_BANDS, COMPLETION_BANDS, LTM_AXES, LTM_COLUMNS,
  *      DEFAULT_LTM_ORDER.
  *   4. FUNCTIONS —
  *      a. ltmValues(), ltmInScope(), ltmAxisOptions() — axes and filtering.
  *      b. repartition() — one chart's slices.
  *      c. photoBand(), photoSummary() — the Photos card.
+ *      c'. completionBand(), completionDistribution() — the Completion card.
  *      d. parseLtmOrder(), serializeLtmOrder(), sortLtms() — the table.
  *
  * NO REACT, NO NETWORK: every figure is computed in the browser from the
@@ -27,8 +28,14 @@
  * A CHART COUNTS WITHOUT ITS OWN FILTER (`repartition`, spec req. 20). The
  * Quality Seal donut, with "DRAFT" selected, still shows the RELEASE share
  * at its true size — faded — instead of collapsing to a single full ring.
- * The information-only charts (CMP, access control) have no filter, so they
- * simply count the scope.
+ * The Photos and Completion cards do the same on their bands
+ * (`photoSummary`, `completionDistribution`). The charts
+ * without a filter (CMP, access control) simply count the scope.
+ *
+ * PHOTOS IS AN AXIS ON A DERIVED VALUE: a bench's band (`photoBand`) — "No
+ * photo", "1 photo", "2–4 photos", "5+ photos" — not a LeanIX field. So is
+ * COMPLETION: a bench's band of `completion.percentage` (`completionBand`),
+ * 0–24 / 25–49 / 50–74 / 75–89 / 90–100 %.
  *
  * THE TABLE SORTS ON ANY COLUMN (`sortLtms`), completion ascending by
  * default; "Not set" always last whatever the direction; ties fall back to
@@ -64,7 +71,9 @@ export type LtmAxisKey =
   | "ata"
   | "ecLevel"
   | "complexity"
-  | "seal";
+  | "seal"
+  | "photos"
+  | "completion";
 
 /** A field a chart can count: every axis, plus the two information-only ones. */
 export type LtmField = LtmAxisKey | "cmp" | "access";
@@ -97,14 +106,14 @@ export type LtmSortDir = "asc" | "desc";
 export type LtmOrder = { column: LtmColumn; dir: LtmSortDir };
 
 export type PhotoSummary = {
-  /** Benches in the scope. */
+  /** Benches counted: the scope without the Photos filter. */
   total: number;
   /** Benches with at least one photo. */
   illustrated: number;
   /** Photos across the scope. */
   photos: number;
   /** Benches per band, in PHOTO_BANDS order. */
-  bands: { band: string; count: number; pct: number }[];
+  bands: { band: string; count: number; pct: number; selected: boolean }[];
 };
 
 /***********************************************************
@@ -113,6 +122,12 @@ export type PhotoSummary = {
 
 /** Shown for any empty value. A gap is data too. */
 export const NOT_SET = "Not set";
+
+export const PHOTO_BANDS = ["No photo", "1 photo", "2–4 photos", "5+ photos"] as const;
+
+/** Completion bands, with each band's lower bound (for its colour). */
+export const COMPLETION_BANDS = ["0–24 %", "25–49 %", "50–74 %", "75–89 %", "90–100 %"] as const;
+export const COMPLETION_BAND_FLOOR = [0, 25, 50, 75, 90] as const;
 
 /** The filter bar, in the spec's order. */
 export const LTM_AXES: LtmAxis[] = [
@@ -125,6 +140,8 @@ export const LTM_AXES: LtmAxis[] = [
   { key: "ecLevel", label: "Export control level", param: "ec", order: EXPORT_CONTROL_ORDER },
   { key: "complexity", label: "Complexity", param: "complexity", order: COMPLEXITY_ORDER },
   { key: "seal", label: "Quality seal", param: "seal", order: SEAL_ORDER },
+  { key: "photos", label: "Photos", param: "photos", order: [...PHOTO_BANDS] },
+  { key: "completion", label: "Completion", param: "completion", order: [...COMPLETION_BANDS] },
 ];
 
 const FIELD_ORDER: Partial<Record<LtmField, string[]>> = {
@@ -132,8 +149,6 @@ const FIELD_ORDER: Partial<Record<LtmField, string[]>> = {
   cmp: YES_NO_ORDER,
   access: YES_NO_ORDER,
 };
-
-export const PHOTO_BANDS = ["No photo", "1 photo", "2–4 photos", "5+ photos"] as const;
 
 export const LTM_COLUMNS: LtmColumn[] = [
   "name",
@@ -157,6 +172,8 @@ const COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "bas
 
 /** The display values a bench carries on a field — never empty. */
 export function ltmValues(ltm: KpiLtm, field: LtmField): string[] {
+  if (field === "photos") return [photoBand(ltm.photos)];
+  if (field === "completion") return [completionBand(ltm.completion)];
   const value = ltm[field];
   if (Array.isArray(value)) return value.length ? value : [NOT_SET];
   return [value ?? NOT_SET];
@@ -226,17 +243,46 @@ export function photoBand(photos: number): (typeof PHOTO_BANDS)[number] {
   return PHOTO_BANDS[3];
 }
 
-export function photoSummary(scope: KpiLtm[]): PhotoSummary {
-  const total = scope.length;
+/** The Photos card: like a chart, counted WITHOUT its own filter. */
+export function photoSummary(ltms: KpiLtm[], filters: LtmFilters): PhotoSummary {
+  const base = ltmInScope(ltms, filters, "photos");
+  const selected = filters.photos ?? [];
+  const total = base.length;
   return {
     total,
-    illustrated: scope.filter((ltm) => ltm.photos > 0).length,
-    photos: scope.reduce((n, ltm) => n + ltm.photos, 0),
+    illustrated: base.filter((ltm) => ltm.photos > 0).length,
+    photos: base.reduce((n, ltm) => n + ltm.photos, 0),
     bands: PHOTO_BANDS.map((band) => {
-      const count = scope.filter((ltm) => photoBand(ltm.photos) === band).length;
-      return { band, count, pct: total ? Math.round((count / total) * 100) : 0 };
+      const count = base.filter((ltm) => photoBand(ltm.photos) === band).length;
+      return { band, count, pct: total ? Math.round((count / total) * 100) : 0, selected: selected.includes(band) };
     }),
   };
+}
+
+/***********************************************************
+ * Functions — completion
+ ***********************************************************/
+
+export function completionBand(completion: number): (typeof COMPLETION_BANDS)[number] {
+  for (let i = COMPLETION_BAND_FLOOR.length - 1; i > 0; i--) {
+    if (completion >= COMPLETION_BAND_FLOOR[i]) return COMPLETION_BANDS[i];
+  }
+  return COMPLETION_BANDS[0];
+}
+
+/**
+ * The Completion card: every band — empty ones too — counted WITHOUT its
+ * own filter, like a chart.
+ */
+export function completionDistribution(ltms: KpiLtm[], filters: LtmFilters): { total: number; slices: Slice[] } {
+  const base = ltmInScope(ltms, filters, "completion");
+  const selected = filters.completion ?? [];
+  const total = base.length;
+  const slices = COMPLETION_BANDS.map((value) => {
+    const count = base.filter((ltm) => completionBand(ltm.completion) === value).length;
+    return { value, count, pct: total ? Math.round((count / total) * 100) : 0, selected: selected.includes(value) };
+  });
+  return { total, slices };
 }
 
 /***********************************************************

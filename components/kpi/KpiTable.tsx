@@ -10,9 +10,9 @@
  * File structure:
  *
  *   1. IMPORTS — useState, Link, clsx, the KpiLtm type, NOT_SET and the
- *      order types, the page-size preference, the pagination bar, TINT.
+ *      order types, the page-size preference, the pagination bar, TINT and completionBar.
  *   2. CONSTANTS — ROW_GRID, COLUMNS (key, header label).
- *   3. FUNCTIONS — completionBar(), joined().
+ *   3. FUNCTIONS — joined().
  *   4. COMPONENT FUNCTION —
  *      a. State — the current page; the page size (remembered preference).
  *      b. Derived data — page count, the clamped page, its rows.
@@ -56,7 +56,7 @@ import clsx from "clsx";
 import type { KpiLtm } from "@/lib/kpi/kpiLabTestMeans";
 import { NOT_SET, type LtmColumn, type LtmOrder } from "@/lib/kpi/kpiStats";
 import { pageSizePreference } from "@/lib/kpi/pageSizePreference";
-import { TINT } from "./kpiStyle";
+import { TINT, completionBar } from "./kpiStyle";
 import TablePagination from "./TablePagination";
 
 const ROW_GRID =
@@ -72,13 +72,6 @@ const COLUMNS: { key: LtmColumn; label: string }[] = [
   { key: "seal", label: "Quality seal" },
   { key: "completion", label: "Completion" },
 ];
-
-/** Bar colour by completion: < 50 %, 50–89 %, ≥ 90 %. */
-function completionBar(completion: number): string {
-  if (completion < 50) return "bg-warning";
-  if (completion < 90) return TINT.accentBar45;
-  return "bg-accent";
-}
 
 /** Several values joined; empty → "Not set". */
 function joined(values: string[]): { text: string; notSet: boolean } {

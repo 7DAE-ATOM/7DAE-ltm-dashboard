@@ -9,7 +9,8 @@
  *   2. FUNCTIONS — token(): a token, optionally see-through.
  *   3. CONSTANTS — COLORS (field → value → colour), NOT_SET_COLOR, OTHER,
  *      TINT (translucent background / border classes).
- *   4. FUNCTIONS — sliceColor(), faded().
+ *   4. FUNCTIONS — completionBar() (table and Completion card), sliceColor(),
+ *      faded().
  *
  * WHY `color-mix` AND NOT `bg-accent/10`. In this app the Tailwind colours
  * are bare `var(--color-…)` strings, which Tailwind cannot split into
@@ -77,6 +78,13 @@ export const TINT = {
   accentBar45: "bg-[color-mix(in_srgb,var(--color-accent)_45%,transparent)]",
   accentBar70: "bg-[color-mix(in_srgb,var(--color-accent)_70%,transparent)]",
 } as const;
+
+/** Completion bar colour: < 50 % warning, 50–89 % light accent, ≥ 90 % accent. */
+export function completionBar(completion: number): string {
+  if (completion < 50) return "bg-warning";
+  if (completion < 90) return TINT.accentBar45;
+  return "bg-accent";
+}
 
 export function sliceColor(field: LtmField, value: string): string {
   if (value === NOT_SET) return NOT_SET_COLOR;

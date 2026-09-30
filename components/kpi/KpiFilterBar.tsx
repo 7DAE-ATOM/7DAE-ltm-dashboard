@@ -1,12 +1,13 @@
 "use client";
 
 /***********************************************************
- * KpiFilterBar — The nine filters of the KPI page, each able to
+ * KpiFilterBar — The eleven filters of the KPI page, each able to
  * hold several values.
  *
  *   FILTERS                                                         Reset all
  *   [Portfolio ▾] [Country ▾] [LTM Type (2) ▾] [Shared ▾] [Aircraft Program ▾]
- *   [ATA ▾] [Export control level ▾] [Complexity ▾] [Quality seal ▾]
+ *   [ATA ▾] [Export control level ▾] [Complexity ▾] [Quality seal ▾] [Photos ▾]
+ *   [Completion ▾]
  *   Active: (LTM Type: SIB ×) (LTM Type: FIB ×) (Quality seal: DRAFT ×)
  *
  * File structure:
@@ -23,7 +24,8 @@
  * CHIPS are the state, each removable on its own. Several values of one
  * filter combine with OR, filters with AND (`ltmInScope`).
  *
- * The chart clicks (Quality Seal, Type, Complexity, Export Control) add to
+ * The chart clicks (Quality Seal, Type, Complexity, Export Control), the
+ * Completion columns and the Photos bands add to
  * these same filters, so their choices show here as chips too.
  *
  * OPTIONS COME FROM THE DATA, in each axis's display order (known values
