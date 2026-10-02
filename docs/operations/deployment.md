@@ -24,7 +24,7 @@ Parameters: `execDockerBuild`, `execDeploy`, `targetEnv` (`val` or `prod`). Stag
 2. `npm install`.
 3. `next build`, with `BASE_HREF`, `NEXT_PUBLIC_BASE_HREF`, and the environment-specific `NEXT_PUBLIC_ATOM_API_BASE_URL` (gateway URL) injected as build-time variables.
 4. Stash `out/`, the `Dockerfile`, and nginx configs.
-5. Build and push the Docker image to Artifactory as `transversal/ltm-dashboard:{version}`.
+5. Build and push the Docker image to Artifactory as `transversal/ltm-dashboard:{version}-{val|prod}` — the backend URL is baked into the image, so val and prod images must never share a tag.
 6. `helm upgrade --install` into namespace `7dae-atom-{val|prod}`, using `deployment/values-{env}.yaml`.
 
 Because `NEXT_PUBLIC_*` variables are baked in at build time, changing the backend URL or environment label for a given deployment requires a rebuild — there's no runtime config override.
