@@ -1,5 +1,6 @@
 import { Page, Text, View, Link } from "@react-pdf/renderer";
 import type { LabTestMean } from "@/lib/types";
+import { labTestMeanHref } from "@/lib/labTestMeanHref";
 import { styles, colors } from "./styles";
 
 type Props = {
@@ -52,7 +53,7 @@ export default function TableOfContents({ benches, baseUrl }: Readonly<Props>) {
               {b.externalId}
             </Text>
             <Link
-              src={`${baseUrl}/labtestmean?id=${encodeURIComponent(b.externalId)}`}
+              src={`${baseUrl}${labTestMeanHref(b.externalId)}`}
               style={{ width: 18, textAlign: "right" }}
             >
               <Text style={{ ...styles.small, color: colors.accent }}>↗</Text>

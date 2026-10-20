@@ -23,6 +23,7 @@ import {
 } from "./icons";
 import { STATUS_LABELS, COMPLEXITY_LABELS, TYPE_LABELS } from "@/lib/labels";
 import { formatDate } from "@/lib/format-date";
+import { labTestMeanHref } from "@/lib/labTestMeanHref";
 
 type ResolvedBench = LabTestMean & { resolvedCover: string | null };
 
@@ -385,7 +386,7 @@ export default function BenchDetailPage({ banc, baseUrl }: Readonly<Props>) {
         fixed
       >
         <Link
-          src={`${baseUrl}/labtestmean?id=${encodeURIComponent(banc.externalId)}`}
+          src={`${baseUrl}${labTestMeanHref(banc.externalId)}`}
           style={{ ...styles.small, color: colors.accent }}
         >
           <Text>View on dashboard ↗</Text>

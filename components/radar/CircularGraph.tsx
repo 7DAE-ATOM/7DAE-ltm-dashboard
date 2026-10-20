@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LabTestMean } from "@/lib/types";
+import { labTestMeanHref } from "@/lib/labTestMeanHref";
 import { buildRadarGraph, type RadarNode, type RadarEdge } from "./buildRadarGraph";
 import {
   dependencyStrokeStyle,
@@ -12,12 +13,6 @@ import BenchPreviewModal, {
 } from "@/components/interaction/BenchPreviewModal";
 
 type Props = { benches: LabTestMean[]; radius: number };
-
-/* The labels are SVG `<a>` elements, not `next/link`, so nothing prefixes the
- * gateway basePath or the configured trailing slash for us — both have to be
- * spelled out here, exactly as `lib/photo.ts` and `Header` do for their own
- * raw URLs. Getting it wrong 404s behind the AFTER gateway and only there. */
-const DETAIL_BASE = `${process.env.NEXT_PUBLIC_BASE_HREF ?? ""}/labtestmean/`;
 
 const LABEL_MAX_CHARS = 22;
 const LABEL_MARGIN = 90; // room reserved outside the circle for radial labels
@@ -238,7 +233,9 @@ export default function CircularGraph({ benches, radius }: Readonly<Props>) {
                     New tab, so following a link never costs the user the
                     diagram they have set up. */}
                 <a
-                  href={`${DETAIL_BASE}?id=${encodeURIComponent(n.id)}`}
+                  // SVG `<a>`, not `next/link`: nothing adds the gateway
+                  // context for us — see `labTestMeanHref`.
+                  href={labTestMeanHref(n.id)}
                   target="_blank"
                   rel="noopener noreferrer"
                   onDoubleClick={(e) => e.stopPropagation()}
