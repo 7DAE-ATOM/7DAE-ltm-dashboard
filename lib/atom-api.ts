@@ -30,6 +30,9 @@ export type DocumentRef = {
 export type LabTestMeanDto = {
   id: string;
   externalId: string;
+  // Business identifier of the bench. Optional: an older synchronizer does
+  // not send it. Trimmed and normalized to null by the adapter.
+  functionalCode?: string | null;
   name: string;
   category: "sib" | "simu" | "fib" | "rt" | "RT" | "share" | null;
   complexity: "simple" | "medium" | "complex" | null;

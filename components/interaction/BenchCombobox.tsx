@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { matchesBenchQuery } from "@/lib/labtestmeans";
 import type { LabTestMean } from "@/lib/types";
 
 type Props = {
@@ -36,11 +37,7 @@ export default function BenchCombobox({
     );
     const q = query.trim().toLowerCase();
     const matches = q
-      ? selectable.filter(
-          (m) =>
-            (m.name ?? "").toLowerCase().includes(q) ||
-            m.externalId.toLowerCase().includes(q),
-        )
+      ? selectable.filter((m) => matchesBenchQuery(m, q))
       : selectable;
     return matches.slice(0, MAX_RESULTS);
   }, [options, query, excludeIds]);

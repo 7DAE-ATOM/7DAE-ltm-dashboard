@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { matchesBenchQuery } from "@/lib/labtestmeans";
 import type { LabTestMean } from "@/lib/types";
 
 type Props = {
@@ -38,7 +39,7 @@ export default function BenchVisibilityList({
   const [search, setSearch] = useState("");
   const q = search.trim().toLowerCase();
   const filtered = q
-    ? benches.filter((b) => b.name.toLowerCase().includes(q))
+    ? benches.filter((b) => matchesBenchQuery(b, q))
     : benches;
 
   function toggle(externalId: string): void {
@@ -76,7 +77,7 @@ export default function BenchVisibilityList({
         type="text"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search…"
+        placeholder="Search name or code…"
         aria-label="Search displayed lab test means"
         className="mb-1.5 w-full rounded border border-border bg-surface px-2 py-1 text-sm text-fg placeholder:text-muted focus:outline-none focus:border-accent"
       />

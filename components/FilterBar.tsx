@@ -390,7 +390,7 @@ export default function FilterBar({
         <div className="space-y-3">
           <input
             type="search"
-            placeholder="Search lab test means, references, managers…"
+            placeholder="Search names, external IDs, functional codes, managers…"
             // Fully controlled from the shared store, with no local mirror: the
             // desktop panel and the mobile sheet are mounted at the same time,
             // and a local copy in each would let them drift apart.

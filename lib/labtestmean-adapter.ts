@@ -255,6 +255,13 @@ function toLifecycle(dto: LabTestMeanDto): LabTestMean["lifecycle"] {
   return lifecycle;
 }
 
+/** Trimmed functional code; null when absent, not a string, or blank. */
+function toFunctionalCode(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
 export function toLabTestMean(dto: LabTestMeanDto): LabTestMean {
   const site = dto.site ?? "";
   const roles = toRoles(dto);
@@ -271,6 +278,7 @@ export function toLabTestMean(dto: LabTestMeanDto): LabTestMean {
   return {
     id: dto.id,
     externalId: dto.externalId,
+    functionalCode: toFunctionalCode(dto.functionalCode),
     name: dto.name,
     type: toType(dto.category),
     complexity: dto.complexity ?? null,

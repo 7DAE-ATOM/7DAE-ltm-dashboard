@@ -96,9 +96,19 @@ export default function LabTestMeanCard({
             : ""}
         </p>
         {/* `mt-auto` eats the leftover height, so the status sits on the
-            card's bottom edge whatever the name and location above it took. */}
-        <div className="mt-auto">
+            card's bottom edge whatever the name and location above it took.
+            The functional code, when there is one, shares that bottom row on
+            the right, small; it truncates before it could push the status. */}
+        <div className="mt-auto flex items-center justify-between gap-2">
           <BadgeStatus status={labTestMean.status} />
+          {labTestMean.functionalCode && (
+            <span
+              className="min-w-0 truncate font-mono text-[10px] text-muted"
+              title={`Functional Code : ${labTestMean.functionalCode}`}
+            >
+              {labTestMean.functionalCode}
+            </span>
+          )}
         </div>
       </div>
     </Link>

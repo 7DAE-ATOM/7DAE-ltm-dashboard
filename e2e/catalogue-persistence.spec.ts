@@ -20,7 +20,7 @@ async function applyPhotoFilter(page: Page): Promise<void> {
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await expect(
-    page.getByPlaceholder("Search lab test means, references, managers…"),
+    page.getByPlaceholder("Search names, external IDs, functional codes, managers…"),
   ).toBeVisible();
 });
 
@@ -36,7 +36,7 @@ test("filters survive navigating to a detail page and back", async ({ page }) =>
 
   await page.goBack();
   await expect(
-    page.getByPlaceholder("Search lab test means, references, managers…"),
+    page.getByPlaceholder("Search names, external IDs, functional codes, managers…"),
   ).toBeVisible();
   await expect(page.getByText(COUNT_RE)).toHaveText(filteredCount);
 });
@@ -50,7 +50,7 @@ test("the Catalogue nav link keeps the current filters", async ({ page }) => {
 
   await page.getByRole("link", { name: "Catalogue" }).click();
   await expect(
-    page.getByPlaceholder("Search lab test means, references, managers…"),
+    page.getByPlaceholder("Search names, external IDs, functional codes, managers…"),
   ).toBeVisible();
 
   await expect(page.getByText(COUNT_RE)).toHaveText(filteredCount);

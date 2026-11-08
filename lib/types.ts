@@ -112,6 +112,8 @@ export type AircraftStructureNode = {
 export type LabTestMean = {
   id: string;
   externalId: string;
+  /** Business identifier of the bench; null when absent, empty or blank. */
+  functionalCode: string | null;
   name: string;
   type: LabTestMeanType;
   complexity: Complexity | null;

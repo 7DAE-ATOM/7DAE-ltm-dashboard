@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
   await pinDensity(page, { columns: 3, rows: 2 });
   await page.goto("/");
   await expect(
-    page.getByPlaceholder("Search lab test means, references, managers…"),
+    page.getByPlaceholder("Search names, external IDs, functional codes, managers…"),
   ).toBeVisible();
 });
 
