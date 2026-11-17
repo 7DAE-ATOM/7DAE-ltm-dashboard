@@ -15,6 +15,7 @@ import type {
   Roles,
   TechnicalCapability,
 } from "./types";
+import { lifecycleDateStart, lifecycleStepState } from "./lifecycleDate";
 
 export const COUNTRY_MAP: Record<string, string> = {
   Fr: "France",
@@ -131,18 +132,32 @@ function toType(raw: LabTestMeanDto["category"]): LabTestMeanType {
   return TYPE_MAP[raw.toLowerCase()] ?? "NA";
 }
 
+const LIFECYCLE_FIELDS = ["kickoff", "eisdateyear", "mothballed", "dismantled"] as const;
+
 /**
  * Status is not stored as an enum on the backend — it's derived from lifecycle
- * dates with this priority:
- *   1. `dismantled` set → out-of-service
- *   2. `mothballed` set → mothballed
- *   3. no `eisdateyear` (entry-into-service) → in-project
+ * dates, each compared with TODAY (`lib/lifecycleDate.ts`): a date in the
+ * future is a PLANNED step, not a reached one. Priority:
+ *   1. `dismantled` reached → out-of-service
+ *   2. `mothballed` reached → mothballed
+ *   3. `eisdateyear` (entry-into-service) not reached — absent or planned → in-project
  *   4. otherwise → operational
+ * "Today" is read once per conversion, i.e. on every data load or refresh.
+ * An unreadable date counts as reached (the former behaviour) and is warned.
  */
 function toStatus(dto: LabTestMeanDto): LabTestMeanStatus {
-  if (dto.dismantled) return "out-of-service";
-  if (dto.mothballed) return "mothballed";
-  if (!dto.eisdateyear) return "in-project";
+  const today = new Date();
+  for (const field of LIFECYCLE_FIELDS) {
+    if (lifecycleDateStart(dto[field]) === "unreadable") {
+      console.warn(
+        `[adapter] ${dto.externalId} · ${field}: unreadable lifecycle date =`,
+        dto[field],
+      );
+    }
+  }
+  if (lifecycleStepState(dto.dismantled, today) === "reached") return "out-of-service";
+  if (lifecycleStepState(dto.mothballed, today) === "reached") return "mothballed";
+  if (lifecycleStepState(dto.eisdateyear, today) !== "reached") return "in-project";
   return "operational";
 }
 

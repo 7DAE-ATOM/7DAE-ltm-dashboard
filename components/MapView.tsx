@@ -127,7 +127,7 @@ export default function MapView({
           offset={R_MAX}
           // The row is chip + name + status badge, and the name is the only
           // one that gives way. At 320px the two fixed ends ("SHARED
-          // RESOURCE" and "Out of Service" are the widest pair) left barely
+          // RESOURCE" and "In Development" are the widest pair) left barely
           // a character for it. `min()` so a phone-width screen still gets a
           // popup that fits on it.
           maxWidth="min(460px, 92vw)"

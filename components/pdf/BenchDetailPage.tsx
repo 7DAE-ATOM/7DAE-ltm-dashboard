@@ -23,6 +23,7 @@ import {
 } from "./icons";
 import { STATUS_LABELS, COMPLEXITY_LABELS, TYPE_LABELS } from "@/lib/labels";
 import { formatDate } from "@/lib/format-date";
+import { lifecycleStepState } from "@/lib/lifecycleDate";
 import { labTestMeanHref } from "@/lib/labTestMeanHref";
 
 type ResolvedBench = LabTestMean & { resolvedCover: string | null };
@@ -81,6 +82,8 @@ const LIFECYCLE_STEPS: {
   label: string;
   Icon: (p: { size?: number; color?: string }) => React.ReactElement;
   reached: (d: string) => string;
+  /** A date in the future: same wording as the detail page's timeline. */
+  planned: (d: string) => string;
   unreached: string;
 }[] = [
   {
@@ -88,13 +91,15 @@ const LIFECYCLE_STEPS: {
     label: "Kickoff",
     Icon: PdfKickoffIcon,
     reached: (d) => `Project started in ${d}`,
+    planned: (d) => `Kickoff planned for ${d}`,
     unreached: "Not started",
   },
   {
     key: "inService",
     label: "In Service",
     Icon: PdfInServiceIcon,
-    reached: (d) => `Operational since ${d}`,
+    reached: (d) => `In service since ${d}`,
+    planned: (d) => `Planned entry into service: ${d}`,
     unreached: "Not yet in service",
   },
   {
@@ -102,6 +107,7 @@ const LIFECYCLE_STEPS: {
     label: "Mothballed",
     Icon: PdfMothballedIcon,
     reached: (d) => `Mothballed since ${d}`,
+    planned: (d) => `Mothballing planned for ${d}`,
     unreached: "Not mothballed",
   },
   {
@@ -109,6 +115,7 @@ const LIFECYCLE_STEPS: {
     label: "Dismantled",
     Icon: PdfDismantledIcon,
     reached: (d) => `Dismantled in ${d}`,
+    planned: (d) => `Dismantling planned for ${d}`,
     unreached: "Still in service",
   },
 ];
@@ -267,8 +274,15 @@ export default function BenchDetailPage({ banc, baseUrl }: Readonly<Props>) {
         <View style={{ flex: 1 }}>
           {LIFECYCLE_STEPS.map((step) => {
             const raw = banc.lifecycle[step.key];
-            const reached = !!raw;
-            const c = reached ? lifecycleColor[step.key] : colors.muted;
+            // A future date is a PLANNED step (lib/lifecycleDate.ts): hollow
+            // dot ringed in the step's colour, muted label, future tense.
+            const state = lifecycleStepState(raw);
+            const reached = state === "reached";
+            const planned = state === "planned";
+            const c = reached || planned ? lifecycleColor[step.key] : colors.muted;
+            let text = step.unreached;
+            if (reached) text = step.reached(formatDate(raw?.trim()));
+            else if (planned) text = step.planned(formatDate(raw?.trim()));
             return (
               <View
                 key={step.key}
@@ -287,7 +301,7 @@ export default function BenchDetailPage({ banc, baseUrl }: Readonly<Props>) {
                       borderRadius: 3,
                       backgroundColor: reached ? c : "transparent",
                       borderWidth: reached ? 0 : 1,
-                      borderColor: colors.muted,
+                      borderColor: planned ? c : colors.muted,
                     }}
                   />
                   <step.Icon size={14} color={c} />
@@ -302,9 +316,7 @@ export default function BenchDetailPage({ banc, baseUrl }: Readonly<Props>) {
                   >
                     {step.label}
                   </Text>
-                  <Text style={styles.small}>
-                    {reached ? step.reached(formatDate(raw)) : step.unreached}
-                  </Text>
+                  <Text style={styles.small}>{text}</Text>
                 </View>
               </View>
             );

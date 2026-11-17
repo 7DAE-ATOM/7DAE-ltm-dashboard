@@ -160,7 +160,7 @@ function Toggle<T extends string>({
           >
             {/* Wrapped, not truncated. In the 340px panel a two-column chapter
               * leaves about a hundred pixels of text per chip — less than
-              * "Out of Service" needs, and portfolio names have no length
+              * "In Development" needs, and portfolio names have no length
               * limit at all. Truncating hid the difference between two labels
               * sharing a prefix, with no tooltip to recover it. Grid items
               * stretch, so a chip that takes two lines simply makes its row

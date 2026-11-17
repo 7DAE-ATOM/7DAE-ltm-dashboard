@@ -2,10 +2,10 @@ import { COMPLEXITY_NA } from "@/lib/labtestmeans";
 import type { LabTestMeanStatus, LabTestMeanType } from "@/lib/types";
 
 export const STATUS_LABELS: Record<LabTestMeanStatus, string> = {
-  operational: "Operational",
+  operational: "In Service",
   mothballed: "Mothballed",
-  "out-of-service": "Out of Service",
-  "in-project": "In Project",
+  "out-of-service": "Dismantled",
+  "in-project": "In Development",
 };
 
 export const TYPE_LABELS: Record<LabTestMeanType, string> = {

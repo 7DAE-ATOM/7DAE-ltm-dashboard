@@ -1,4 +1,6 @@
-import type { ComponentType } from "react";
+import type { ComponentType, CSSProperties } from "react";
+import clsx from "clsx";
+import { lifecycleStepState } from "@/lib/lifecycleDate";
 import type { Lifecycle } from "@/lib/types";
 import {
   KickoffIcon,
@@ -16,6 +18,8 @@ type StepDef = {
   Icon: ComponentType<{ size?: number; className?: string }>;
   colorVar: string;
   reachedDescription: (formattedDate: string) => string;
+  /** A date in the future: the step is planned, not reached. */
+  plannedDescription: (formattedDate: string) => string;
   unreachedDescription: string;
 };
 
@@ -26,6 +30,7 @@ const STEPS: StepDef[] = [
     Icon: KickoffIcon,
     colorVar: "var(--color-accent)",
     reachedDescription: (d) => `Project started in ${d}`,
+    plannedDescription: (d) => `Kickoff planned for ${d}`,
     unreachedDescription: "Not started",
   },
   {
@@ -33,7 +38,8 @@ const STEPS: StepDef[] = [
     label: "In Service",
     Icon: InServiceIcon,
     colorVar: "var(--color-success)",
-    reachedDescription: (d) => `Operational since ${d}`,
+    reachedDescription: (d) => `In service since ${d}`,
+    plannedDescription: (d) => `Planned entry into service: ${d}`,
     unreachedDescription: "Not yet in service",
   },
   {
@@ -42,6 +48,7 @@ const STEPS: StepDef[] = [
     Icon: MothballedIcon,
     colorVar: "var(--color-warning)",
     reachedDescription: (d) => `Mothballed since ${d}`,
+    plannedDescription: (d) => `Mothballing planned for ${d}`,
     unreachedDescription: "Not mothballed",
   },
   {
@@ -50,6 +57,7 @@ const STEPS: StepDef[] = [
     Icon: DismantledIcon,
     colorVar: "var(--color-danger)",
     reachedDescription: (d) => `Dismantled in ${d}`,
+    plannedDescription: (d) => `Dismantling planned for ${d}`,
     unreachedDescription: "Still in service",
   },
 ];
@@ -61,34 +69,38 @@ function StepCard({
   step: StepDef;
   rawDate?: string;
 }>) {
-  const reached = !!rawDate;
-  const formatted = formatDate(rawDate);
-  const description = reached
-    ? step.reachedDescription(formatted)
-    : step.unreachedDescription;
+  // A date in the future is a PLANNED step (lib/lifecycleDate.ts): dashed
+  // border, hollow dot ringed in the step's colour, faded icon, future tense.
+  const state = lifecycleStepState(rawDate);
+  const reached = state === "reached";
+  const planned = state === "planned";
+  const formatted = formatDate(rawDate?.trim());
+  let description = step.unreachedDescription;
+  if (reached) description = step.reachedDescription(formatted);
+  else if (planned) description = step.plannedDescription(formatted);
+
+  let dotStyle: CSSProperties = {
+    backgroundColor: "transparent",
+    boxShadow: "inset 0 0 0 1px var(--color-muted)",
+  };
+  if (reached) dotStyle = { backgroundColor: step.colorVar };
+  else if (planned) dotStyle = { backgroundColor: "transparent", boxShadow: `inset 0 0 0 1.5px ${step.colorVar}` };
 
   return (
     <li
-      className="pl-3 py-1.5 border-l-[3px] flex items-start gap-3"
+      className={clsx(
+        "pl-3 py-1.5 border-l-[3px] flex items-start gap-3",
+        planned && "border-dashed",
+      )}
       style={{
-        borderLeftColor: reached ? step.colorVar : "var(--color-border)",
+        borderLeftColor: reached || planned ? step.colorVar : "var(--color-border)",
       }}
     >
       <div
-        className="flex items-center gap-2 shrink-0"
-        style={{ color: reached ? step.colorVar : "var(--color-muted)" }}
+        className={clsx("flex items-center gap-2 shrink-0", planned && "opacity-60")}
+        style={{ color: reached || planned ? step.colorVar : "var(--color-muted)" }}
       >
-        <span
-          className="inline-block w-2 h-2 rounded-full"
-          style={
-            reached
-              ? { backgroundColor: step.colorVar }
-              : {
-                  backgroundColor: "transparent",
-                  boxShadow: "inset 0 0 0 1px var(--color-muted)",
-                }
-          }
-        />
+        <span className="inline-block w-2 h-2 rounded-full" style={dotStyle} />
         <step.Icon size={18} />
       </div>
 
