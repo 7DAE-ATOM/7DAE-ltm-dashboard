@@ -81,12 +81,25 @@ function matchesPortfolio(m: LabTestMean, f: Filters): boolean {
   return f.portfolios.includes(m.portfolio.name);
 }
 
+/**
+ * The bench pickers' search (the /depgraph combobox, the "Displayed LTM"
+ * list): name, external id or functional code contains `q`. `q` must
+ * already be trimmed and lowercased. One rule, so a bench is found the same
+ * way everywhere.
+ */
+export function matchesBenchQuery(m: LabTestMean, q: string): boolean {
+  return [m.name, m.externalId, m.functionalCode].some(
+    (s) => typeof s === "string" && s.toLowerCase().includes(q),
+  );
+}
+
 function matchesSearch(m: LabTestMean, f: Filters): boolean {
   if (!f.search) return true;
   const q = f.search.toLowerCase();
   const hay = [
     m.name,
     m.externalId,
+    m.functionalCode ?? "",
     m.description,
     m.manager?.name ?? "",
     ...m.programs,

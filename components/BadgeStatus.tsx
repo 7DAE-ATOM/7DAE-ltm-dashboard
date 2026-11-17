@@ -3,10 +3,10 @@ import clsx from "clsx";
 import StatusIcon from "./icons/StatusIcon";
 
 const labels: Record<LabTestMeanStatus, string> = {
-  operational: "Operational",
+  operational: "In Service",
   mothballed: "Mothballed",
-  "out-of-service": "Out of Service",
-  "in-project": "In Project",
+  "out-of-service": "Dismantled",
+  "in-project": "In Development",
 };
 
 const colors: Record<LabTestMeanStatus, string> = {

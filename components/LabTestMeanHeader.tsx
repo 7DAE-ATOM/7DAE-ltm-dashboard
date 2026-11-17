@@ -10,6 +10,19 @@ import CountryMapIcon from "./icons/CountryMapIcon";
 import AircraftProgramTile from "./AircraftProgramTile";
 import AtaTile from "./AtaTile";
 import LifecycleSection from "./detail/LifecycleSection";
+import LinkIcon from "./icons/LinkIcon";
+
+/** One identifier of the bench: link icon, "Label : value", in an accent-tinted pill. */
+function IdentifierPill({ label, value }: Readonly<{ label: string; value: string }>) {
+  return (
+    <span className="flex w-full items-center gap-1.5 rounded-md border border-[color-mix(in_srgb,var(--color-accent)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-2.5 py-0.5 text-xs font-semibold text-fg">
+      <LinkIcon size={13} className="shrink-0 text-accent" />
+      <span>
+        {label} : <span className="font-bold">{value}</span>
+      </span>
+    </span>
+  );
+}
 
 export default function LabTestMeanHeader({
   labTestMean,
@@ -31,14 +44,20 @@ export default function LabTestMeanHeader({
           {m.name}
         </h1>
         <div className="flex items-center flex-wrap gap-3">
-          {m.externalId && (
-            <span className="text-xs font-mono text-fg">
-              [{m.externalId}]
-            </span>
-          )}
           <BadgeStatus status={m.status} withIcon />
           <BadgeQualitySeal lxState={m.lxState} />
         </div>
+        {/* The two identifiers, one pill each, stacked (temp/f1.jpg). The
+            inline grid is as wide as the longer pill and every pill fills
+            it, so both frames share one width. A missing one shows no pill. */}
+        {(m.externalId || m.functionalCode) && (
+          <div className="inline-grid gap-1 pt-2">
+            {m.externalId && <IdentifierPill label="External Ref" value={m.externalId} />}
+            {m.functionalCode && (
+              <IdentifierPill label="Functional Code" value={m.functionalCode} />
+            )}
+          </div>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
